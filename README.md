@@ -14,7 +14,35 @@ _For questions & feedback, please reach out to karsten.rh1@gmail.com!_
 
 ## Quick Guide
 
-First, clone this repository and set the `PYTHONPATH` environment variable with `env PYTHONPATH=src python bin/run_patchcore.py`.
+### 1. Environment setup
+
+```shell
+# Install dependencies
+uv sync --extra dev
+
+# Configure local paths (never committed)
+cp .env.example .env   # then edit if your paths differ
+source .env
+```
+
+The dataset lives **outside the repository**, at a stable path on your machine or compute server:
+
+| Machine        | `MVTEC_PATH`                                              |
+|----------------|-----------------------------------------------------------|
+| Local (dev)    | `$HOME/dev/telecom/stage_1a_data/mvtec_anomaly_detection` |
+| Compute server | set in `.env` on that machine (e.g. `/scratch/<user>/...`) |
+
+Download MVTec AD from <https://www.mvtec.com/company/research/datasets/mvtec-ad> and extract it so the layout is:
+
+```
+$MVTEC_PATH/
+├── bottle/
+├── cable/
+└── ...   (15 categories total)
+```
+
+### 2. Reference training run
+
 To train PatchCore on MVTec AD (as described below), run
 
 ```
