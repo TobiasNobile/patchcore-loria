@@ -1,13 +1,35 @@
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import mlflow
 
 LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_TRACKING_URI = "sqlite:///mlruns.db"
+
+
+def make_run_name(
+    backbone_names: List[str],
+    sampler_name: str,
+    coreset_pct: float,
+    imagesize: int = 224,
+) -> str:
+    """Build a canonical MLflow run name from the key hyperparameters.
+
+    Convention: {backbone(s)}-{sampler}-p{pct}-im{size}
+
+    Examples:
+        make_run_name(["wideresnet50"], "approx_greedy_coreset", 0.1, 224)
+        → "wideresnet50-approx_greedy_coreset-p10-im224"
+
+        make_run_name(["wideresnet50", "resnext101"], "greedy_coreset", 0.01)
+        → "wideresnet50+resnext101-greedy_coreset-p01-im224"
+    """
+    backbone = "+".join(backbone_names)
+    pct = f"p{int(round(coreset_pct * 100)):02d}"
+    return f"{backbone}-{sampler_name}-{pct}-im{imagesize}"
 
 
 class RunContext:

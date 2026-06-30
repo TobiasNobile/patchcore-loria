@@ -56,6 +56,54 @@ check out `sample_evaluation.sh` and `sample_training.sh`.
 
 ---
 
+## MLflow Tracking
+
+Runs are tracked locally with MLflow. Start the UI with:
+
+```shell
+uv run mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5001
+# then open http://localhost:5001
+```
+
+### Naming convention
+
+| MLflow field  | Value                                   | Example                                          |
+|---------------|-----------------------------------------|--------------------------------------------------|
+| `experiment`  | Dataset name                            | `mvtec`                                          |
+| `run_name`    | `{backbone}-{sampler}-p{pct}-im{size}` | `wideresnet50-approx_greedy_coreset-p10-im224`   |
+| tag `category`| MVTec subdataset                        | `bottle`                                         |
+
+**Backbone** — model name as passed to `-b` (e.g. `wideresnet50`). For ensembles, join with `+`:
+`wideresnet50+resnext101`.
+
+**Sampler** — coreset method (`approx_greedy_coreset`, `greedy_coreset`, `identity`).
+
+**pct** — coreset percentage × 100, zero-padded to 2 digits: `-p 0.1` → `p10`, `-p 0.01` → `p01`.
+
+**im** — final image size after centre-crop (`--imagesize`).
+
+### Logged metrics (per run)
+
+| Key                   | Description                                      |
+|-----------------------|--------------------------------------------------|
+| `instance_auroc`      | Image-level AUROC                                |
+| `full_pixel_auroc`    | Pixel-level AUROC on all test images             |
+| `anomaly_pixel_auroc` | Pixel-level AUROC restricted to anomalous images |
+
+Use `patchcore.tracking.make_run_name` to build the run name programmatically:
+
+```python
+from patchcore.tracking import make_run_name, patchcore_run
+
+run_name = make_run_name(["wideresnet50"], "approx_greedy_coreset", 0.1, 224)
+# → "wideresnet50-approx_greedy_coreset-p10-im224"
+
+with patchcore_run(experiment="mvtec", run_name=run_name, params=config) as run:
+    run.log_metrics({"instance_auroc": auroc, ...})
+```
+
+---
+
 ## In-Depth Description
 
 ### Requirements
