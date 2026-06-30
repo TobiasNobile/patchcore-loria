@@ -18,6 +18,7 @@ dependencies = [
     "scikit-learn>=1.0.1",
     "scipy>=1.7.1",
     "torchvision>=0.11.1",
+    "timm",
     "tqdm>=4.62.3",
 ]
 
