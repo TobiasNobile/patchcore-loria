@@ -12,6 +12,7 @@ import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
+import patchcore.tracking
 import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
@@ -42,7 +43,13 @@ def run(
     save_segmentation_images,
     save_patchcore_model,
 ):
-    methods = {key: item for (key, item) in methods}
+    flat = []
+    for m in methods:
+        if isinstance(m, list):
+            flat.extend(m)
+        else:
+            flat.append(m)
+    methods = dict(flat)
 
     run_save_path = patchcore.utils.create_storage_folder(
         results_path, log_project, log_group, mode="iterate"
@@ -75,153 +82,172 @@ def run(
 
         dataset_name = dataloaders["training"].name
 
-        with device_context:
-            torch.cuda.empty_cache()
-            imagesize = dataloaders["training"].dataset.imagesize
-            sampler = methods["get_sampler"](
-                device,
-            )
-            PatchCore_list = methods["get_patchcore"](imagesize, sampler, device)
-            if len(PatchCore_list) > 1:
-                LOGGER.info(
-                    "Utilizing PatchCore Ensemble (N={}).".format(len(PatchCore_list))
-                )
-            for i, PatchCore in enumerate(PatchCore_list):
-                torch.cuda.empty_cache()
-                if PatchCore.backbone.seed is not None:
-                    patchcore.utils.fix_seeds(PatchCore.backbone.seed, device)
-                LOGGER.info(
-                    "Training models ({}/{})".format(i + 1, len(PatchCore_list))
-                )
-                torch.cuda.empty_cache()
-                PatchCore.fit(dataloaders["training"])
+        mlflow_params = {
+            "seed": seed,
+            "dataset": dataset_name,
+            **methods.get("patchcore_config", {}),
+            **methods.get("sampler_config", {}),
+        }
 
-            torch.cuda.empty_cache()
-            aggregator = {"scores": [], "segmentations": []}
-            for i, PatchCore in enumerate(PatchCore_list):
+        with patchcore.tracking.patchcore_run(
+            experiment=log_project,
+            run_name=log_group,
+            params=mlflow_params,
+        ) as mlflow_run:
+            with device_context:
                 torch.cuda.empty_cache()
-                LOGGER.info(
-                    "Embedding test data with models ({}/{})".format(
-                        i + 1, len(PatchCore_list)
+                imagesize = dataloaders["training"].dataset.imagesize
+                sampler = methods["get_sampler"](
+                    device,
+                )
+                PatchCore_list = methods["get_patchcore"](imagesize, sampler, device)
+                if len(PatchCore_list) > 1:
+                    LOGGER.info(
+                        "Utilizing PatchCore Ensemble (N={}).".format(len(PatchCore_list))
                     )
-                )
-                scores, segmentations, labels_gt, masks_gt = PatchCore.predict(
-                    dataloaders["testing"]
-                )
-                aggregator["scores"].append(scores)
-                aggregator["segmentations"].append(segmentations)
-
-            scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
-            scores = np.mean(scores, axis=0)
-
-            segmentations = np.array(aggregator["segmentations"])
-            min_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .min(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            max_scores = (
-                segmentations.reshape(len(segmentations), -1)
-                .max(axis=-1)
-                .reshape(-1, 1, 1, 1)
-            )
-            segmentations = (segmentations - min_scores) / (max_scores - min_scores)
-            segmentations = np.mean(segmentations, axis=0)
-
-            anomaly_labels = [
-                x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
-            ]
-
-            # (Optional) Plot example images.
-            if save_segmentation_images:
-                image_paths = [
-                    x[2] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
-                mask_paths = [
-                    x[3] for x in dataloaders["testing"].dataset.data_to_iterate
-                ]
-
-                def image_transform(image):
-                    in_std = np.array(
-                        dataloaders["testing"].dataset.transform_std
-                    ).reshape(-1, 1, 1)
-                    in_mean = np.array(
-                        dataloaders["testing"].dataset.transform_mean
-                    ).reshape(-1, 1, 1)
-                    image = dataloaders["testing"].dataset.transform_img(image)
-                    return np.clip(
-                        (image.numpy() * in_std + in_mean) * 255, 0, 255
-                    ).astype(np.uint8)
-
-                def mask_transform(mask):
-                    return dataloaders["testing"].dataset.transform_mask(mask).numpy()
-
-                image_save_path = os.path.join(
-                    run_save_path, "segmentation_images", dataset_name
-                )
-                os.makedirs(image_save_path, exist_ok=True)
-                patchcore.utils.plot_segmentation_images(
-                    image_save_path,
-                    image_paths,
-                    segmentations,
-                    scores,
-                    mask_paths,
-                    image_transform=image_transform,
-                    mask_transform=mask_transform,
-                )
-
-            LOGGER.info("Computing evaluation metrics.")
-            auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
-                scores, anomaly_labels
-            )["auroc"]
-
-            # Compute PRO score & PW Auroc for all images
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                segmentations, masks_gt
-            )
-            full_pixel_auroc = pixel_scores["auroc"]
-
-            # Compute PRO score & PW Auroc only images with anomalies
-            sel_idxs = []
-            for i in range(len(masks_gt)):
-                if np.sum(masks_gt[i]) > 0:
-                    sel_idxs.append(i)
-            pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                [segmentations[i] for i in sel_idxs],
-                [masks_gt[i] for i in sel_idxs],
-            )
-            anomaly_pixel_auroc = pixel_scores["auroc"]
-
-            result_collect.append(
-                {
-                    "dataset_name": dataset_name,
-                    "instance_auroc": auroc,
-                    "full_pixel_auroc": full_pixel_auroc,
-                    "anomaly_pixel_auroc": anomaly_pixel_auroc,
-                }
-            )
-
-            for key, item in result_collect[-1].items():
-                if key != "dataset_name":
-                    LOGGER.info("{0}: {1:3.3f}".format(key, item))
-
-            # (Optional) Store PatchCore model for later re-use.
-            # SAVE all patchcores only if mean_threshold is passed?
-            if save_patchcore_model:
-                patchcore_save_path = os.path.join(
-                    run_save_path, "models", dataset_name
-                )
-                os.makedirs(patchcore_save_path, exist_ok=True)
                 for i, PatchCore in enumerate(PatchCore_list):
-                    prepend = (
-                        "Ensemble-{}-{}_".format(i + 1, len(PatchCore_list))
-                        if len(PatchCore_list) > 1
-                        else ""
+                    torch.cuda.empty_cache()
+                    if PatchCore.backbone.seed is not None:
+                        patchcore.utils.fix_seeds(PatchCore.backbone.seed, device)
+                    LOGGER.info(
+                        "Training models ({}/{})".format(i + 1, len(PatchCore_list))
                     )
-                    PatchCore.save_to_path(patchcore_save_path, prepend)
+                    torch.cuda.empty_cache()
+                    PatchCore.fit(dataloaders["training"])
+
+                torch.cuda.empty_cache()
+                aggregator = {"scores": [], "segmentations": []}
+                for i, PatchCore in enumerate(PatchCore_list):
+                    torch.cuda.empty_cache()
+                    LOGGER.info(
+                        "Embedding test data with models ({}/{})".format(
+                            i + 1, len(PatchCore_list)
+                        )
+                    )
+                    scores, segmentations, labels_gt, masks_gt = PatchCore.predict(
+                        dataloaders["testing"]
+                    )
+                    aggregator["scores"].append(scores)
+                    aggregator["segmentations"].append(segmentations)
+
+                scores = np.array(aggregator["scores"])
+                min_scores = scores.min(axis=-1).reshape(-1, 1)
+                max_scores = scores.max(axis=-1).reshape(-1, 1)
+                scores = (scores - min_scores) / (max_scores - min_scores)
+                scores = np.mean(scores, axis=0)
+
+                segmentations = np.array(aggregator["segmentations"])
+                min_scores = (
+                    segmentations.reshape(len(segmentations), -1)
+                    .min(axis=-1)
+                    .reshape(-1, 1, 1, 1)
+                )
+                max_scores = (
+                    segmentations.reshape(len(segmentations), -1)
+                    .max(axis=-1)
+                    .reshape(-1, 1, 1, 1)
+                )
+                segmentations = (segmentations - min_scores) / (max_scores - min_scores)
+                segmentations = np.mean(segmentations, axis=0)
+
+                anomaly_labels = [
+                    x[1] != "good" for x in dataloaders["testing"].dataset.data_to_iterate
+                ]
+
+                # (Optional) Plot example images.
+                if save_segmentation_images:
+                    image_paths = [
+                        x[2] for x in dataloaders["testing"].dataset.data_to_iterate
+                    ]
+                    mask_paths = [
+                        x[3] for x in dataloaders["testing"].dataset.data_to_iterate
+                    ]
+
+                    def image_transform(image):
+                        in_std = np.array(
+                            dataloaders["testing"].dataset.transform_std
+                        ).reshape(-1, 1, 1)
+                        in_mean = np.array(
+                            dataloaders["testing"].dataset.transform_mean
+                        ).reshape(-1, 1, 1)
+                        image = dataloaders["testing"].dataset.transform_img(image)
+                        return np.clip(
+                            (image.numpy() * in_std + in_mean) * 255, 0, 255
+                        ).astype(np.uint8)
+
+                    def mask_transform(mask):
+                        return dataloaders["testing"].dataset.transform_mask(mask).numpy()
+
+                    image_save_path = os.path.join(
+                        run_save_path, "segmentation_images", dataset_name
+                    )
+                    os.makedirs(image_save_path, exist_ok=True)
+                    patchcore.utils.plot_segmentation_images(
+                        image_save_path,
+                        image_paths,
+                        segmentations,
+                        scores,
+                        mask_paths,
+                        image_transform=image_transform,
+                        mask_transform=mask_transform,
+                    )
+
+                LOGGER.info("Computing evaluation metrics.")
+                auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
+                    scores, anomaly_labels
+                )["auroc"]
+
+                # Compute PRO score & PW Auroc for all images
+                pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+                    segmentations, masks_gt
+                )
+                full_pixel_auroc = pixel_scores["auroc"]
+
+                # Compute PRO score & PW Auroc only images with anomalies
+                sel_idxs = []
+                for i in range(len(masks_gt)):
+                    if np.sum(masks_gt[i]) > 0:
+                        sel_idxs.append(i)
+                pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
+                    [segmentations[i] for i in sel_idxs],
+                    [masks_gt[i] for i in sel_idxs],
+                )
+                anomaly_pixel_auroc = pixel_scores["auroc"]
+
+                result_collect.append(
+                    {
+                        "dataset_name": dataset_name,
+                        "instance_auroc": auroc,
+                        "full_pixel_auroc": full_pixel_auroc,
+                        "anomaly_pixel_auroc": anomaly_pixel_auroc,
+                    }
+                )
+
+                for key, item in result_collect[-1].items():
+                    if key != "dataset_name":
+                        LOGGER.info("{0}: {1:3.3f}".format(key, item))
+
+                # (Optional) Store PatchCore model for later re-use.
+                if save_patchcore_model:
+                    patchcore_save_path = os.path.join(
+                        run_save_path, "models", dataset_name
+                    )
+                    os.makedirs(patchcore_save_path, exist_ok=True)
+                    for i, PatchCore in enumerate(PatchCore_list):
+                        prepend = (
+                            "Ensemble-{}-{}_".format(i + 1, len(PatchCore_list))
+                            if len(PatchCore_list) > 1
+                            else ""
+                        )
+                        PatchCore.save_to_path(patchcore_save_path, prepend)
+
+            mlflow_run.log_metrics({
+                "instance_auroc": auroc,
+                "full_pixel_auroc": full_pixel_auroc,
+                "anomaly_pixel_auroc": anomaly_pixel_auroc,
+            })
+            if save_segmentation_images:
+                mlflow_run.log_artifacts(image_save_path)
 
         LOGGER.info("\n\n-----\n")
 
@@ -312,7 +338,21 @@ def patch_core(
             loaded_patchcores.append(patchcore_instance)
         return loaded_patchcores
 
-    return ("get_patchcore", get_patchcore)
+    return [
+        ("get_patchcore", get_patchcore),
+        ("patchcore_config", {
+            "backbone_names": backbone_names,
+            "layers_to_extract_from": list(layers_to_extract_from),
+            "pretrain_embed_dimension": pretrain_embed_dimension,
+            "target_embed_dimension": target_embed_dimension,
+            "preprocessing": preprocessing,
+            "aggregation": aggregation,
+            "anomaly_scorer_num_nn": anomaly_scorer_num_nn,
+            "patchsize": patchsize,
+            "patchoverlap": patchoverlap,
+            "faiss_on_gpu": faiss_on_gpu,
+        }),
+    ]
 
 
 @main.command("sampler")
@@ -327,7 +367,10 @@ def sampler(name, percentage):
         elif name == "approx_greedy_coreset":
             return patchcore.sampler.ApproximateGreedyCoresetSampler(percentage, device)
 
-    return ("get_sampler", get_sampler)
+    return [
+        ("get_sampler", get_sampler),
+        ("sampler_config", {"sampler_name": name, "coreset_pct": percentage}),
+    ]
 
 
 @main.command("dataset")
