@@ -1,6 +1,6 @@
 import pytest
 
-from patchcore.tracking import _flatten_params, patchcore_run
+from patchcore.tracking import _flatten_params, make_run_name, patchcore_run
 
 
 def test_flatten_params_flat():
@@ -77,3 +77,18 @@ def test_patchcore_run_skips_missing_artifact(tmp_path, caplog):
             run.log_artifacts("/nonexistent/path")
 
     assert "Artifact path not found" in caplog.text
+
+
+def test_make_run_name_single_backbone():
+    name = make_run_name(["wideresnet50"], "approx_greedy_coreset", 0.1, 224)
+    assert name == "wideresnet50-approx_greedy_coreset-p10-im224"
+
+
+def test_make_run_name_ensemble():
+    name = make_run_name(["wideresnet50", "resnext101"], "greedy_coreset", 0.01, 320)
+    assert name == "wideresnet50+resnext101-greedy_coreset-p01-im320"
+
+
+def test_make_run_name_identity_sampler():
+    name = make_run_name(["resnet18"], "identity", 1.0, 224)
+    assert name == "resnet18-identity-p100-im224"
