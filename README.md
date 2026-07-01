@@ -311,6 +311,24 @@ decoding required), 2026-07-01:
 This is a strong, naturally-occurring class imbalance — relevant if `Wearing_Hat` is used to
 define the normal/anomalous split for the PatchCore experiment on CelebA.
 
+### One-class train / test split
+
+Implemented in `src/patchcore/datasets/celeba.py` (`CelebADataset`, mirrors the `MVTecDataset`
+interface). `Wearing_Hat` defines the anomaly label:
+
+- **Train** (`DatasetSplit.TRAIN`): only "no-hat" images from the CelebA `train` split — the
+  PatchCore memory bank only ever sees "normal" data. 154,731 images.
+- **Test** (`DatasetSplit.TEST`): hat + no-hat images from the CelebA `test` split, **balanced**
+  by randomly subsampling the majority (no-hat) class down to the minority (hat) count
+  (`seed`-controlled, default `0`). 839 hat + 839 no-hat = 1,678 images.
+
+```python
+from patchcore.datasets.celeba import CelebADataset, DatasetSplit
+
+train_dataset = CelebADataset(split=DatasetSplit.TRAIN)               # 154,731 no-hat images
+test_dataset = CelebADataset(split=DatasetSplit.TEST, seed=0)         # 839 + 839 balanced images
+```
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
