@@ -329,6 +329,22 @@ train_dataset = CelebADataset(split=DatasetSplit.TRAIN)               # 154,731 
 test_dataset = CelebADataset(split=DatasetSplit.TEST, seed=0)         # 839 + 839 balanced images
 ```
 
+### Running PatchCore (fit only, no evaluation yet)
+
+`bin/run_patchcore_celeba.py` fits a PatchCore memory bank on the one-class (no-hat) CelebA train
+set — no predict/evaluation step, since there is no pixel-level ground-truth mask yet:
+
+```shell
+python bin/run_patchcore_celeba.py --gpu 0 --seed 0 --save_patchcore_model \
+--log_project CelebA_Results results \
+-b wideresnet50 -le layer2 -le layer3 --faiss_on_gpu \
+--pretrain_embed_dimension 1024 --target_embed_dimension 1024 --anomaly_scorer_num_nn 1 --patchsize 3 \
+--sampler_name approx_greedy_coreset -p 0.1 --resize 256 --imagesize 224
+```
+
+Pixel-level evaluation (real "hat" segmentation ground-truth, sourced from CelebAMask-HQ) is a
+follow-up step, not yet wired in.
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
