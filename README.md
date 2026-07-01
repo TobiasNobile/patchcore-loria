@@ -281,6 +281,36 @@ If you use the code in this repository, please cite
 }
 ```
 
+## Jalon 1 — PatchCore on CelebA
+
+### Dataset
+
+Loaded via HuggingFace `datasets` (see `src/patchcore/celeba.py`):
+
+```python
+from datasets import load_dataset
+ds = load_dataset("flwrlabs/celeba")  # train / valid / test splits, cached locally
+```
+
+Cached locally under `~/.cache/huggingface/hub/datasets--flwrlabs--celeba/.../img_align+identity+attr/*.parquet`.
+Each row has an `image` plus 40 boolean CelebA attributes (`Wearing_Hat`, `Male`, `Smiling`, ...).
+
+### Hat / No-hat class imbalance
+
+Counted directly from the `Wearing_Hat` boolean column of the cached parquet shards (no image
+decoding required), 2026-07-01:
+
+| Split   | Hat   | No hat  | Total   | Hat %  |
+|---------|-------|---------|---------|--------|
+| train   | 8,039 | 154,731 | 162,770 | 4.94%  |
+| valid   |   940 |  18,927 |  19,867 | 4.73%  |
+| test    |   839 |  19,123 |  19,962 | 4.20%  |
+| **all** | **9,818** | **192,781** | **202,599** | **4.85%** |
+
+→ Roughly 1 "hat" image for every ~20 "no-hat" images (ratio ≈ 1:19.6 across the full dataset).
+This is a strong, naturally-occurring class imbalance — relevant if `Wearing_Hat` is used to
+define the normal/anomalous split for the PatchCore experiment on CelebA.
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
