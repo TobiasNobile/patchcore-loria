@@ -63,6 +63,50 @@ def test_patchcore_run_tags_failed_on_exception(tmp_path):
     assert runs[0].data.tags["run_status"] == "FAILED"
 
 
+def test_patchcore_run_tags_output_artifact_name(tmp_path):
+    tracking_uri = f"sqlite:///{tmp_path}/mlruns.db"
+    artifact_file = tmp_path / "overlay.png"
+    artifact_file.write_text("fake image bytes")
+
+    with patchcore_run(
+        experiment="test_exp",
+        run_name="tagged_output",
+        params={},
+        tracking_uri=tracking_uri,
+    ) as run:
+        run.log_artifacts(str(artifact_file))
+
+    import mlflow
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+    experiment = client.get_experiment_by_name("test_exp")
+    runs = client.search_runs(experiment.experiment_id)
+    assert runs[0].data.tags["output_artifacts"] == "overlay.png"
+
+
+def test_patchcore_run_tags_output_artifact_names_for_dir(tmp_path):
+    tracking_uri = f"sqlite:///{tmp_path}/mlruns.db"
+    artifact_dir = tmp_path / "segmentation_images"
+    artifact_dir.mkdir()
+    (artifact_dir / "img1.png").write_text("a")
+    (artifact_dir / "img2.png").write_text("b")
+
+    with patchcore_run(
+        experiment="test_exp",
+        run_name="tagged_output_dir",
+        params={},
+        tracking_uri=tracking_uri,
+    ) as run:
+        run.log_artifacts(str(artifact_dir))
+
+    import mlflow
+    mlflow.set_tracking_uri(tracking_uri)
+    client = mlflow.tracking.MlflowClient()
+    experiment = client.get_experiment_by_name("test_exp")
+    runs = client.search_runs(experiment.experiment_id)
+    assert runs[0].data.tags["output_artifacts"] == "img1.png, img2.png"
+
+
 def test_patchcore_run_skips_missing_artifact(tmp_path, caplog):
     import logging
     tracking_uri = f"sqlite:///{tmp_path}/mlruns.db"

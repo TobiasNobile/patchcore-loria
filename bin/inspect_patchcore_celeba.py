@@ -75,7 +75,11 @@ def main(
     train_dataset = torch.utils.data.Subset(train_dataset, range(train_subset))
     train_dataset.imagesize = (3, imagesize, imagesize)
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=8, shuffle=False, num_workers=num_workers
+        train_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
     )
 
     test_dataset = CelebADataset(

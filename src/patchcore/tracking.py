@@ -48,11 +48,19 @@ class RunContext:
         LOGGER.info("Logged metrics: %s", {k: f"{v:.4f}" for k, v in metrics.items()})
 
     def log_artifacts(self, path: str) -> None:
-        """Log a file or an entire directory as artifacts."""
+        """Log a file or an entire directory as artifacts.
+
+        Also tags the run with the logged file name(s), so the run can be
+        traced back to its output(s) from the MLflow UI/API without having
+        to open the artifact browser.
+        """
         if os.path.isdir(path):
             mlflow.log_artifacts(path)
+            names = sorted(os.listdir(path))
+            mlflow.set_tag("output_artifacts", ", ".join(names))
         elif os.path.isfile(path):
             mlflow.log_artifact(path)
+            mlflow.set_tag("output_artifacts", os.path.basename(path))
         else:
             LOGGER.warning("Artifact path not found, skipping: %s", path)
 
