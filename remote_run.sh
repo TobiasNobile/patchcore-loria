@@ -17,6 +17,15 @@ REMOTE_HOST="dce.metz.centralesupelec.fr"
 REMOTE_DIR="~/patchcore-inspection"
 LOCAL_DIR="$HOME/dev/telecom/stage_1a/patchcore-inspection"
 
+# dce.metz.centralesupelec.fr n'est que la passerelle SSH (login node) : elle
+# n'a pas de GPU. Les GPU ne sont accessibles que via une partition SLURM
+# (cf. https://dce.pages.centralesupelec.fr), donc on passe par `srun` au lieu
+# d'exécuter python directement sur la passerelle. gpu_inter est dispo H24
+# mais plafonnée à 2h de walltime et 1 job à la fois — largement suffisant
+# pour un run d'inspection ; augmenter SLURM_TIME si besoin pour un run plus long.
+SLURM_PARTITION="gpu_inter"
+SLURM_TIME="00:30:00"
+
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste
 # des arguments est transmis tel quel au script Python.
 SCRIPT="${1:-bin/inspect_patchcore_celeba.py}"
@@ -47,9 +56,9 @@ QUOTED_ARGS=""
 for arg in "${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"}"; do
   QUOTED_ARGS+=" $(printf '%q' "$arg")"
 done
-echo "🚀  Exécution de ${SCRIPT}${QUOTED_ARGS} sur le serveur..."
+echo "🚀  Exécution de ${SCRIPT}${QUOTED_ARGS} sur le serveur (partition SLURM ${SLURM_PARTITION}, GPU)..."
 ssh "${REMOTE_USER}@${REMOTE_HOST}" \
-  "cd ${REMOTE_DIR} && source .venv/bin/activate && python $(printf '%q' "$SCRIPT")${QUOTED_ARGS}"
+  "cd ${REMOTE_DIR} && source .venv/bin/activate && srun --partition=${SLURM_PARTITION} --time=${SLURM_TIME} python $(printf '%q' "$SCRIPT")${QUOTED_ARGS}"
 
 # ─── 3. Sync : serveur → local (rapatrie les outputs) ─────────────────────
 echo "📥  Récupération des résultats..."

@@ -99,9 +99,20 @@ def set_torch_device(gpu_ids):
     Args:
         gpu_ids: [list] list of gpu ids. If empty, cpu is used.
     """
-    if len(gpu_ids) and torch.cuda.is_available():
-        return torch.device("cuda:{}".format(gpu_ids[0]))
-    return torch.device("cpu")
+    if len(gpu_ids):
+        if torch.cuda.is_available():
+            device = torch.device("cuda:{}".format(gpu_ids[0]))
+        else:
+            LOGGER.warning(
+                "GPU %s requested but torch.cuda.is_available() is False "
+                "-- falling back to CPU.",
+                gpu_ids[0],
+            )
+            device = torch.device("cpu")
+    else:
+        device = torch.device("cpu")
+    LOGGER.info("Using device: %s", device)
+    return device
 
 
 def fix_seeds(seed, with_torch=True, with_cuda=True):

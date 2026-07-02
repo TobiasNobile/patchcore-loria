@@ -1,0 +1,12 @@
+./remote_run.sh bin/inspect_patchcore_celeba.py results/inspect_celeba_hat.png \
+  --gpu 0 \
+  --seed 0 \
+  --image_index 0 \
+  --train_subset 2000 \
+  --backbone_name wideresnet50 \
+  --sampler_name identity \
+  --percentage 0.1 \
+  --resize 256 \
+  --imagesize 224 \
+  --log_project CelebA_Results \
+  --log_group inspect_heatmap

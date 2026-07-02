@@ -18,6 +18,7 @@ LOGGER = logging.getLogger(__name__)
 
 @click.command()
 @click.argument("output_path", type=str)
+@click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 @click.option(
     "--image_index",
@@ -44,10 +45,12 @@ LOGGER = logging.getLogger(__name__)
 @click.option("--percentage", "-p", type=float, default=0.1, show_default=True)
 @click.option("--resize", type=int, default=256, show_default=True)
 @click.option("--imagesize", type=int, default=224, show_default=True)
+@click.option("--num_workers", type=int, default=8, show_default=True)
 @click.option("--log_project", type=str, default="CelebA_Results", show_default=True)
 @click.option("--log_group", type=str, default="inspect_heatmap", show_default=True)
 def main(
     output_path,
+    gpu,
     seed,
     image_index,
     train_subset,
@@ -56,13 +59,14 @@ def main(
     percentage,
     resize,
     imagesize,
+    num_workers,
     log_project,
     log_group,
 ):
     """Fit PatchCore on a subset of CelebA no-hat images, then overlay the
     anomaly heatmap on one CelebA TEST image to eyeball whether it lights up
     on the hat. Logged to MLflow (params + overlay artifact + score)."""
-    device = patchcore.utils.set_torch_device([])
+    device = patchcore.utils.set_torch_device(gpu)
     patchcore.utils.fix_seeds(seed, device)
 
     train_dataset = CelebADataset(
@@ -71,7 +75,7 @@ def main(
     train_dataset = torch.utils.data.Subset(train_dataset, range(train_subset))
     train_dataset.imagesize = (3, imagesize, imagesize)
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=8, shuffle=False, num_workers=0
+        train_dataset, batch_size=8, shuffle=False, num_workers=num_workers
     )
 
     test_dataset = CelebADataset(
