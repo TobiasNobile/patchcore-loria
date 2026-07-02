@@ -3,5 +3,7 @@ __pycache__/
 LabletAnomaly.egg-info/
 mlruns/
 mlruns.db
+mlruns_remote/
+mlruns_remote.db
 .env
 results
