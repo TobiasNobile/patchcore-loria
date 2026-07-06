@@ -1,4 +1,5 @@
 import logging
+import time
 
 import click
 import matplotlib.pyplot as plt
@@ -114,6 +115,9 @@ def main(
         nn_method=nn_method,
     )
 
+    # Log the exact torch/CUDA stack so runs from this machine vs. the server
+    # can be told apart (and version mismatches diagnosed) from the MLflow UI.
+    device_is_cuda = device.type == "cuda"
     mlflow_params = {
         "seed": seed,
         "image_index": image_index,
@@ -124,6 +128,10 @@ def main(
         "coreset_pct": percentage,
         "resize": resize,
         "imagesize": imagesize,
+        "device": str(device),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda or "cpu",
+        "gpu_name": torch.cuda.get_device_name(device) if device_is_cuda else "cpu",
     }
 
     with patchcore.tracking.patchcore_run(
@@ -135,7 +143,25 @@ def main(
         LOGGER.info(
             "Predicting on test image #%d (anomaly=%s)...", image_index, sample["anomaly"]
         )
+        # Time inference. CUDA kernels are async, so synchronize on both sides
+        # to measure real GPU time -- but only when actually on CUDA, otherwise
+        # torch.cuda.synchronize() raises on a CPU/MPS-only build (e.g. laptop).
+        if device_is_cuda:
+            torch.cuda.synchronize(device)
+        t0 = time.perf_counter()
         scores, segmentations, _, _ = patchcore_instance.predict(test_dataloader)
+        if device_is_cuda:
+            torch.cuda.synchronize(device)
+        inference_seconds = time.perf_counter() - t0
+
+        n_images = len(test_dataloader.dataset)
+        LOGGER.info(
+            "Inference on %d image(s) took %.3f s (%.1f ms/image).",
+            n_images,
+            inference_seconds,
+            1000.0 * inference_seconds / max(n_images, 1),
+        )
+
         score, heatmap = scores[0], np.array(segmentations[0])
 
         mean = np.array(train_dataset.dataset.transform_mean).reshape(-1, 1, 1)
@@ -152,7 +178,13 @@ def main(
         plt.close()
         LOGGER.info("Saved overlay to %s", output_path)
 
-        mlflow_run.log_metrics({"anomaly_score": score})
+        mlflow_run.log_metrics(
+            {
+                "anomaly_score": score,
+                "inference_seconds": inference_seconds,
+                "inference_ms_per_image": 1000.0 * inference_seconds / max(n_images, 1),
+            }
+        )
         mlflow_run.log_artifacts(output_path)
 
 
