@@ -143,10 +143,9 @@ def main(
         image = np.clip((sample["image"].numpy() * std + mean) * 255, 0, 255).astype(np.uint8)
         image = image.transpose(1, 2, 0)
 
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
 
         plt.imshow(image)
-        plt.imshow(heatmap, cmap="jet", alpha=0.5)
+        plt.imshow(heatmap, cmap="jet", alpha=0.5, vmin=0, vmax=1)
         plt.axis("off")
         plt.title("anomaly={} score={:.3f}".format(sample["anomaly"], score))
         plt.savefig(output_path, bbox_inches="tight")
