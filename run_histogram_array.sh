@@ -28,7 +28,7 @@ LOCAL_DIR="$HOME/dev/telecom/stage_1a/patchcore-inspection"
 SLURM_PARTITION="gpu_prod_long"
 SLURM_TIME="02:00:00"     # ts=2000 est léger, mais coreset p0.7 ~20min + scoring
 SLURM_MEM=""              # vide => pas de --mem (ts=2000 tient large dans 30 Go)
-CONCURRENCY=4
+CONCURRENCY=6
 
 # ─── CONFIG (mêmes hyperparamètres que les heatmaps déjà produites) ─────────
 SEEDS=(42)
