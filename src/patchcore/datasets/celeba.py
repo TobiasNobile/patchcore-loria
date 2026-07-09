@@ -75,6 +75,13 @@ class CelebADataset(torch.utils.data.Dataset):
 
         return dataset.select(sorted(hat_idx + no_hat_idx))
 
+    @property
+    def labels(self):
+        """Ground-truth anomaly labels (0/1) per image, without decoding any
+        image — reads the HF attribute column directly. Same order as
+        __getitem__ / __len__."""
+        return [int(hat) for hat in self.dataset[_ANOMALY_ATTRIBUTE]]
+
     def __len__(self):
         return len(self.dataset)
 

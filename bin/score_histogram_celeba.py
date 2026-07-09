@@ -91,14 +91,35 @@ def main(
     train_dataset.imagesize = (3, imagesize, imagesize)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=8, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
+        num_workers=num_workers, pin_memory=True,   
     )
 
     test_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TEST, seed=seed
     )
+
+    # On connaît les labels (hat/no-hat) SANS inférence -> on tire n index par
+    # classe en amont et on ne score QUE ces images (pas de compute gaspillé sur
+    # des images qu'on jetterait ensuite). Effectifs égaux = min(demandé, dispo).
+    test_labels = np.asarray(test_dataset.labels, dtype=int)
+    normal_idx = np.where(test_labels == 0)[0]
+    anomaly_idx = np.where(test_labels == 1)[0]
+    n = min(n_per_class, len(normal_idx), len(anomaly_idx))
+    if n < n_per_class:
+        LOGGER.warning(
+            "n_per_class=%d demandé mais seulement %d no-hat / %d hat "
+            "disponibles => on utilise n=%d par classe.",
+            n_per_class, len(normal_idx), len(anomaly_idx), n,
+        )
+    rng = np.random.RandomState(seed)
+    selected_idx = np.concatenate([
+        rng.choice(normal_idx, n, replace=False),
+        rng.choice(anomaly_idx, n, replace=False),
+    ])
+    test_subset = torch.utils.data.Subset(test_dataset, selected_idx.tolist())
+    test_subset.imagesize = (3, imagesize, imagesize)
     test_dataloader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=test_batch_size, shuffle=False,
+        test_subset, batch_size=test_batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
     )
 
@@ -122,7 +143,7 @@ def main(
         target_embed_dimension=1024,
         patchsize=3,
         featuresampler=sampler,
-        anomaly_scorer_num_nn=1,
+        anomaly_scorer_num_nn=1, # 1 seul plus proche voisin
         nn_method=nn_method,
     )
 
@@ -145,8 +166,7 @@ def main(
     LOGGER.info("Fitting on %d no-hat images...", len(train_dataset))
     patchcore_instance.fit(train_dataloader)
 
-    n_test = len(test_dataloader.dataset)
-    LOGGER.info("Scoring %d test images...", n_test)
+    LOGGER.info("Scoring %d test images (n=%d par classe)...", 2 * n, n)
     if device_is_cuda:
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
@@ -155,22 +175,12 @@ def main(
         torch.cuda.synchronize(device)
     scoring_seconds = time.perf_counter() - t0
 
+    # Les images scorées sont déjà l'échantillon équilibré (n par classe) :
+    # il suffit de séparer par label retourné, plus aucun tirage à faire ici.
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels_gt, dtype=int)
-    normal_all = scores[labels == 0]
-    anomaly_all = scores[labels == 1]
-
-    # Effectifs ÉGAUX par classe = min(demandé, dispo dans chaque classe).
-    n = min(n_per_class, len(normal_all), len(anomaly_all))
-    if n < n_per_class:
-        LOGGER.warning(
-            "n_per_class=%d demandé mais seulement %d no-hat / %d hat "
-            "disponibles => on utilise n=%d par classe.",
-            n_per_class, len(normal_all), len(anomaly_all), n,
-        )
-    rng = np.random.RandomState(seed)
-    normal_scores = rng.choice(normal_all, n, replace=False)
-    anomaly_scores = rng.choice(anomaly_all, n, replace=False)
+    normal_scores = scores[labels == 0]
+    anomaly_scores = scores[labels == 1]
     LOGGER.info("Histogramme sur n=%d par classe (no-hat vs hat).", n)
 
     # AUROC sur l'échantillon équilibré tracé.
@@ -221,8 +231,8 @@ def main(
         "n_per_class_used": int(n),
         "normal_score_mean": float(np.mean(normal_scores)),
         "anomaly_score_mean": float(np.mean(anomaly_scores)),
-        "n_normal_available": int(len(normal_all)),
-        "n_anomaly_available": int(len(anomaly_all)),
+        "n_normal_available": int(len(normal_idx)),
+        "n_anomaly_available": int(len(anomaly_idx)),
     }
     sidecar = os.path.splitext(output_path)[0] + ".json"
     with open(sidecar, "w") as fh:
