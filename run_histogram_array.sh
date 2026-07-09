@@ -38,8 +38,7 @@ SAMPLERS=(identity approx_greedy_coreset)
 PERCENTAGES=(0.01 0.1 0.2 0.5 0.7)
 RESIZES=(256)
 IMAGESIZES=(224)
-MARK_INDICES=(405 961)    # images repérées sur chaque histogramme
-N_TRAIN_EVAL=1000         # images de train held-out scorées (distribution bleue)
+N_PER_CLASS=1000          # effectif par classe (no-hat/hat), plafonné au dispo (~839 hat)
 LOG_PROJECT="CelebA_Results"
 
 # ─── 1. Manifest : 1 ligne = 1 figure (combo) ──────────────────────────────
@@ -68,10 +67,6 @@ for seed in "${SEEDS[@]}"; do
 done
 N=$(wc -l < "${MANIFEST}" | tr -d ' ')
 echo "📝  Manifest : ${N} figures → ${MANIFEST}"
-
-# Arguments --mark_index (constants)
-MARK_ARGS=""
-for i in "${MARK_INDICES[@]}"; do MARK_ARGS+=" --mark_index ${i}"; done
 
 # Directive mémoire optionnelle
 if [[ -n "${SLURM_MEM}" ]]; then
@@ -111,7 +106,7 @@ fi
 echo "[task \${SLURM_ARRAY_TASK_ID}] seed=\${seed} ts=\${ts} sampler=\${sampler} pct=\${pct}"
 python bin/score_histogram_celeba.py "\${out}" \\
   --gpu 0 --seed "\${seed}" \\
-  --train_subset "\${ts}" --n_train_eval ${N_TRAIN_EVAL} ${MARK_ARGS} \\
+  --train_subset "\${ts}" --n_per_class ${N_PER_CLASS} \\
   --backbone_name "\${backbone}" \\
   --sampler_name "\${sampler}" --percentage "\${pct}" \\
   --resize "\${resize}" --imagesize "\${imagesize}" \\

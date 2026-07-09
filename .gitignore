@@ -4,6 +4,7 @@ LabletAnomaly.egg-info/
 mlruns/
 mlruns.db
 mlruns_remote/
+mlruns_array/
 mlruns_remote.db
 .env
 results

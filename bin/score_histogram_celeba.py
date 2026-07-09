@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -18,9 +19,9 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
-# Couleurs reprises de l'exemple (bleu = train / in-dist, orange = test).
-COLOR_TRAIN = "#5B8FB9"
-COLOR_TEST = "#E8A33D"
+# Couleurs reprises de l'exemple (bleu = normal / in-dist, orange = anomalie / OOD).
+COLOR_NORMAL = "#5B8FB9"
+COLOR_ANOMALY = "#E8A33D"
 
 
 @click.command()
@@ -35,20 +36,13 @@ COLOR_TEST = "#E8A33D"
     help="Nombre d'images no-hat du split TRAIN servant à construire la banque.",
 )
 @click.option(
-    "--n_train_eval",
+    "--n_per_class",
     type=int,
     default=1000,
     show_default=True,
-    help="Nombre d'images no-hat de train HELD-OUT (au-delà du fit) scorées pour "
-    "la distribution 'train' (bleu). Elles ne sont PAS dans la banque.",
-)
-@click.option(
-    "--mark_index",
-    type=int,
-    default=(405, 961),
-    multiple=True,
-    show_default=True,
-    help="Index d'images du split TEST à marquer d'une ligne verticale (leur score).",
+    help="Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. "
+    "Plafonné au nombre d'images disponibles par classe dans le test "
+    "(la classe hat n'a qu'~839 images).",
 )
 @click.option("--backbone_name", "-b", type=str, default="wideresnet50", show_default=True)
 @click.option(
@@ -70,8 +64,7 @@ def main(
     gpu,
     seed,
     train_subset,
-    n_train_eval,
-    mark_index,
+    n_per_class,
     backbone_name,
     sampler_name,
     percentage,
@@ -83,49 +76,32 @@ def main(
     log_project,
     log_group,
 ):
-    """Fit PatchCore sur `train_subset` images no-hat, puis score deux ensembles
-    d'images et superpose leurs distributions de score d'anomalie (niveau image) :
-      - BLEU  : images no-hat de train HELD-OUT (hors banque) = 'in-distribution'.
-      - ORANGE: images du split test (hat + no-hat).
-    Les images `mark_index` (par défaut 405 et 961) sont repérées par une ligne
-    verticale. Loggé dans MLflow (params + AUROC test + means + figure)."""
+    """Fit PatchCore sur `train_subset` images no-hat, score le split TEST, puis
+    superpose la distribution des scores d'anomalie des images NO-HAT (normal,
+    bleu) et HAT (anomalie, orange) — avec le MÊME effectif par classe
+    (`n_per_class`, échantillonné aléatoirement, plafonné au dispo). Les deux
+    groupes sont des données de TEST. Loggé dans MLflow (AUROC + means + figure)."""
     device = patchcore.utils.set_torch_device(gpu)
     patchcore.utils.fix_seeds(seed, device)
 
-    # --- Datasets ---------------------------------------------------------
-    train_full = CelebADataset(
+    train_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TRAIN, seed=seed
     )
-    n_train = len(train_full)
-    fit_dataset = torch.utils.data.Subset(train_full, range(min(train_subset, n_train)))
-    fit_dataset.imagesize = (3, imagesize, imagesize)
-
-    # Held-out : images de train APRÈS celles du fit (jamais mises dans la banque).
-    heldout_hi = min(train_subset + n_train_eval, n_train)
-    heldout_range = range(train_subset, heldout_hi)
-    if len(heldout_range) == 0:
-        raise click.ClickException(
-            "Pas d'images de train held-out disponibles (train_subset={} >= {}).".format(
-                train_subset, n_train
-            )
-        )
-    heldout_dataset = torch.utils.data.Subset(train_full, list(heldout_range))
+    train_dataset = torch.utils.data.Subset(train_dataset, range(train_subset))
+    train_dataset.imagesize = (3, imagesize, imagesize)
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=8, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )
 
     test_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TEST, seed=seed
     )
-
-    def _loader(ds):
-        return torch.utils.data.DataLoader(
-            ds, batch_size=test_batch_size, shuffle=False,
-            num_workers=num_workers, pin_memory=True,
-        )
-
-    fit_dataloader = torch.utils.data.DataLoader(
-        fit_dataset, batch_size=8, shuffle=False, num_workers=num_workers, pin_memory=True
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=test_batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
     )
 
-    # --- PatchCore --------------------------------------------------------
     backbone = patchcore.backbones.load(backbone_name)
     backbone.name, backbone.seed = backbone_name, None
     nn_method = patchcore.common.FaissNN(False, 4)
@@ -154,8 +130,7 @@ def main(
     mlflow_params = {
         "seed": seed,
         "train_subset": train_subset,
-        "n_train_eval": len(heldout_dataset),
-        "n_test_eval": len(test_dataset),
+        "n_per_class_requested": n_per_class,
         "backbone_name": backbone_name,
         "sampler_name": sampler_name,
         "coreset_pct": percentage,
@@ -167,90 +142,104 @@ def main(
         "gpu_name": torch.cuda.get_device_name(device) if device_is_cuda else "cpu",
     }
 
-    with patchcore.tracking.patchcore_run(
-        experiment=log_project, run_name=log_group, params=mlflow_params
-    ) as mlflow_run:
-        LOGGER.info("Fitting on %d no-hat images...", len(fit_dataset))
-        patchcore_instance.fit(fit_dataloader)
+    LOGGER.info("Fitting on %d no-hat images...", len(train_dataset))
+    patchcore_instance.fit(train_dataloader)
 
-        LOGGER.info("Scoring %d held-out train (blue) images...", len(heldout_dataset))
-        if device_is_cuda:
-            torch.cuda.synchronize(device)
-        t0 = time.perf_counter()
-        train_scores, _, _, _ = patchcore_instance.predict(_loader(heldout_dataset))
+    n_test = len(test_dataloader.dataset)
+    LOGGER.info("Scoring %d test images...", n_test)
+    if device_is_cuda:
+        torch.cuda.synchronize(device)
+    t0 = time.perf_counter()
+    scores, _, labels_gt, _ = patchcore_instance.predict(test_dataloader)
+    if device_is_cuda:
+        torch.cuda.synchronize(device)
+    scoring_seconds = time.perf_counter() - t0
 
-        LOGGER.info("Scoring %d test (orange) images...", len(test_dataset))
-        test_scores, _, test_labels, _ = patchcore_instance.predict(_loader(test_dataset))
-        if device_is_cuda:
-            torch.cuda.synchronize(device)
-        scoring_seconds = time.perf_counter() - t0
+    scores = np.asarray(scores, dtype=float)
+    labels = np.asarray(labels_gt, dtype=int)
+    normal_all = scores[labels == 0]
+    anomaly_all = scores[labels == 1]
 
-        train_scores = np.asarray(train_scores, dtype=float)
-        test_scores = np.asarray(test_scores, dtype=float)
-        test_labels = np.asarray(test_labels, dtype=int)
-
-        # AUROC anomalie (hat vs no-hat) DANS le test (le test est balancé).
-        auroc = float("nan")
-        if len(np.unique(test_labels)) == 2:
-            auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
-                test_scores, test_labels
-            )["auroc"]
-
-        # --- Figure : histogrammes superposés, bins partagés ---------------
-        all_scores = np.concatenate([train_scores, test_scores])
-        lo, hi = float(all_scores.min()), float(all_scores.max())
-        if hi <= lo:
-            hi = lo + 1e-6
-        edges = np.linspace(lo, hi, bins + 1)
-
-        plt.figure(figsize=(8, 5))
-        plt.hist(
-            train_scores, bins=edges, alpha=0.65, color=COLOR_TRAIN,
-            label="Train no-hat held-out  n={}".format(len(train_scores)),
+    # Effectifs ÉGAUX par classe = min(demandé, dispo dans chaque classe).
+    n = min(n_per_class, len(normal_all), len(anomaly_all))
+    if n < n_per_class:
+        LOGGER.warning(
+            "n_per_class=%d demandé mais seulement %d no-hat / %d hat "
+            "disponibles => on utilise n=%d par classe.",
+            n_per_class, len(normal_all), len(anomaly_all), n,
         )
-        plt.hist(
-            test_scores, bins=edges, alpha=0.65, color=COLOR_TEST,
-            label="Test (hat+no-hat)  n={}".format(len(test_scores)),
+    rng = np.random.RandomState(seed)
+    normal_scores = rng.choice(normal_all, n, replace=False)
+    anomaly_scores = rng.choice(anomaly_all, n, replace=False)
+    LOGGER.info("Histogramme sur n=%d par classe (no-hat vs hat).", n)
+
+    # AUROC sur l'échantillon équilibré tracé.
+    sampled_scores = np.concatenate([normal_scores, anomaly_scores])
+    sampled_labels = np.concatenate([np.zeros(n, int), np.ones(n, int)])
+    auroc = float("nan")
+    if n > 0:
+        auroc = patchcore.metrics.compute_imagewise_retrieval_metrics(
+            sampled_scores, sampled_labels
+        )["auroc"]
+
+    # Histogramme superposé, bins PARTAGÉS.
+    lo, hi = float(sampled_scores.min()), float(sampled_scores.max())
+    if hi <= lo:
+        hi = lo + 1e-6
+    edges = np.linspace(lo, hi, bins + 1)
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(
+        normal_scores, bins=edges, alpha=0.65, color=COLOR_NORMAL,
+        label="No-hat (normal)  n={}".format(n),
+    )
+    plt.hist(
+        anomaly_scores, bins=edges, alpha=0.65, color=COLOR_ANOMALY,
+        label="Hat (anomalie)  n={}".format(n),
+    )
+    plt.xlabel("Score d'anomalie")
+    plt.ylabel("Nombre d'instances")
+    tag = "identity" if sampler_name == "identity" else "{} p={}".format(
+        sampler_name, percentage
+    )
+    plt.title("{}  |  ts={}  |  AUROC={:.3f}".format(tag, train_subset, auroc))
+    plt.legend()
+    plt.grid(True, alpha=0.2)
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    plt.savefig(output_path, bbox_inches="tight", dpi=120)
+    plt.close()
+    LOGGER.info("Saved histogram to %s", output_path)
+
+    # Métriques : sidecar JSON GARANTI (à côté du PNG) + logging MLflow
+    # BEST-EFFORT. Le file store MLflow sur NFS lève un "Stale file handle"
+    # quand des tâches parallèles se disputent le verrou -> on ne laisse jamais
+    # ça détruire un résultat déjà calculé (figure + JSON écrits avant).
+    metrics = {
+        "auroc": auroc,
+        "scoring_seconds": scoring_seconds,
+        "n_per_class_used": int(n),
+        "normal_score_mean": float(np.mean(normal_scores)),
+        "anomaly_score_mean": float(np.mean(anomaly_scores)),
+        "n_normal_available": int(len(normal_all)),
+        "n_anomaly_available": int(len(anomaly_all)),
+    }
+    sidecar = os.path.splitext(output_path)[0] + ".json"
+    with open(sidecar, "w") as fh:
+        json.dump({**mlflow_params, **metrics}, fh, indent=2)
+    LOGGER.info("Saved metrics to %s", sidecar)
+
+    try:
+        with patchcore.tracking.patchcore_run(
+            experiment=log_project, run_name=log_group, params=mlflow_params
+        ) as mlflow_run:
+            mlflow_run.log_metrics(metrics)
+            mlflow_run.log_artifacts(output_path)
+    except Exception as exc:  # noqa: BLE001 - MLflow ne doit jamais tuer le run
+        LOGGER.warning(
+            "Logging MLflow échoué (%s) — figure et métriques déjà sauvées (%s, %s).",
+            exc, output_path, sidecar,
         )
-
-        # Lignes verticales pour les images marquées (405, 961).
-        mark_colors = ["#B4436C", "#3B7A57", "#7D3AC1", "#C1440E"]
-        for i, idx in enumerate(mark_index):
-            if 0 <= idx < len(test_scores):
-                s = test_scores[idx]
-                lab = "hat" if test_labels[idx] == 1 else "no-hat"
-                plt.axvline(
-                    s, color=mark_colors[i % len(mark_colors)], linestyle="--", linewidth=1.8,
-                    label="idx {} ({})  score={:.2f}".format(idx, lab, s),
-                )
-
-        plt.xlabel("Score d'anomalie")
-        plt.ylabel("Nombre d'instances")
-        tag = "identity" if sampler_name == "identity" else "{} p={}".format(
-            sampler_name, percentage
-        )
-        plt.title("{}  |  ts={}  |  AUROC test={:.3f}".format(tag, train_subset, auroc))
-        plt.legend(fontsize=8)
-        plt.grid(True, alpha=0.2)
-
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        plt.savefig(output_path, bbox_inches="tight", dpi=120)
-        plt.close()
-        LOGGER.info("Saved histogram to %s", output_path)
-
-        metrics = {
-            "auroc_test": auroc,
-            "scoring_seconds": scoring_seconds,
-            "train_score_mean": float(np.mean(train_scores)),
-            "test_score_mean": float(np.mean(test_scores)),
-            "n_train_eval": len(train_scores),
-            "n_test_eval": len(test_scores),
-        }
-        for idx in mark_index:
-            if 0 <= idx < len(test_scores):
-                metrics["score_idx{}".format(idx)] = float(test_scores[idx])
-        mlflow_run.log_metrics(metrics)
-        mlflow_run.log_artifacts(output_path)
 
 
 if __name__ == "__main__":

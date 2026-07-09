@@ -26,7 +26,7 @@ fi
 echo "[task ${SLURM_ARRAY_TASK_ID}] seed=${seed} ts=${ts} sampler=${sampler} pct=${pct}"
 python bin/score_histogram_celeba.py "${out}" \
   --gpu 0 --seed "${seed}" \
-  --train_subset "${ts}" --n_train_eval 1000  --mark_index 405 --mark_index 961 \
+  --train_subset "${ts}" --n_per_class 1000 \
   --backbone_name "${backbone}" \
   --sampler_name "${sampler}" --percentage "${pct}" \
   --resize "${resize}" --imagesize "${imagesize}" \
