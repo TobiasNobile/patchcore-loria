@@ -7,6 +7,7 @@ import click
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from scipy.stats import wasserstein_distance
 
 import patchcore.backbones
 import patchcore.common
@@ -22,6 +23,34 @@ LOGGER = logging.getLogger(__name__)
 # Couleurs reprises de l'exemple (bleu = normal / in-dist, orange = anomalie / OOD).
 COLOR_NORMAL = "#5B8FB9"
 COLOR_ANOMALY = "#E8A33D"
+
+
+def normalized_wasserstein(scores_a, scores_b):
+    """Distance de Wasserstein-1 entre deux échantillons 1D, normalisée par
+    l'écart-type regroupé.
+
+    W1 seule a les unités du score d'anomalie (échelle arbitraire, qui varie
+    d'une config d'hyperparamètres à l'autre) -> on la divise par sigma_pooled
+    pour obtenir une grandeur SANS dimension, comparable entre configs. C'est
+    une taille d'effet, qui généralise le d de Cohen (auquel elle est égale si
+    les deux distributions sont gaussiennes de même variance).
+
+        W1           = aire entre les CDF empiriques (scipy.wasserstein_distance)
+        sigma_pooled = sqrt((var_a + var_b) / 2)          [écarts-types échantillon]
+        W1_normalise = W1 / sigma_pooled
+
+    Fonction pure : renvoie {w1, w1_normalized, pooled_std}.
+    """
+    scores_a = np.asarray(scores_a, dtype=float)
+    scores_b = np.asarray(scores_b, dtype=float)
+    if len(scores_a) < 2 or len(scores_b) < 2:
+        return {"w1": float("nan"), "w1_normalized": float("nan"), "pooled_std": float("nan")}
+    w1 = float(wasserstein_distance(scores_a, scores_b))
+    pooled_std = float(
+        np.sqrt((np.var(scores_a, ddof=1) + np.var(scores_b, ddof=1)) / 2.0)
+    )
+    w1_normalized = w1 / pooled_std if pooled_std > 0 else float("nan")
+    return {"w1": w1, "w1_normalized": w1_normalized, "pooled_std": pooled_std}
 
 
 @click.command()
@@ -192,6 +221,9 @@ def main(
             sampled_scores, sampled_labels
         )["auroc"]
 
+    # W1 normalisée entre no-hat et hat : l'écart d'amplitude, sans échelle.
+    wass = normalized_wasserstein(normal_scores, anomaly_scores)
+
     # Histogramme superposé, bins PARTAGÉS.
     lo, hi = float(sampled_scores.min()), float(sampled_scores.max())
     if hi <= lo:
@@ -212,7 +244,9 @@ def main(
     tag = "identity" if sampler_name == "identity" else "{} p={}".format(
         sampler_name, percentage
     )
-    plt.title("{}  |  ts={}  |  AUROC={:.3f}".format(tag, train_subset, auroc))
+    plt.title("{}  |  ts={}  |  W1 norm={:.3f}".format(
+        tag, train_subset, wass["w1_normalized"]
+    ))
     plt.legend()
     plt.grid(True, alpha=0.2)
 
@@ -226,6 +260,9 @@ def main(
     # quand des tâches parallèles se disputent le verrou -> on ne laisse jamais
     # ça détruire un résultat déjà calculé (figure + JSON écrits avant).
     metrics = {
+        "w1_normalized": wass["w1_normalized"],
+        "w1": wass["w1"],
+        "pooled_std": wass["pooled_std"],
         "auroc": auroc,
         "scoring_seconds": scoring_seconds,
         "n_per_class_used": int(n),
