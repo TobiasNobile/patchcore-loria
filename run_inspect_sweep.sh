@@ -47,18 +47,18 @@ TEST_SPLIT_SIZE=1678
 # CONFIG — édite ces tableaux pour définir les combinaisons à balayer.
 # ======================================================================
 
-SEEDS=(0 1 2 3 4 42 104)
-TRAIN_SUBSETS=(2000 5000 10000 20000 30000 50000 100000)
+SEEDS=(42)
+TRAIN_SUBSETS=(2000 10000)
 BACKBONE_NAMES=(wideresnet50)
 SAMPLERS=(identity approx_greedy_coreset)
-PERCENTAGES=(0.01 0.02 0.1 0.2 0.3 0.5 0.7)
+PERCENTAGES=(0.01 0.1 0.2 0.5 0.7)
 RESIZES=(256)
 IMAGESIZES=(224)
 
 # image_index :
 #   - tableau vide ()  → un index ALÉATOIRE tiré à chaque run
 #   - liste d'entiers  → chaque index est balayé (ajoute une dimension au sweep)
-IMAGE_INDICES=()
+IMAGE_INDICES=(961 405)
 
 LOG_PROJECT="CelebA_Results"
 
@@ -66,9 +66,14 @@ LOG_PROJECT="CelebA_Results"
 # Fin de la CONFIG — normalement rien à modifier en dessous.
 # ======================================================================
 
+# run_inspect : UN fit PatchCore, évalué sur TOUTES les images passées en
+# arguments (à partir du 8e). Le fit ne dépendant pas de l'image de test, on
+# évite ainsi de le refaire une fois par image.
 run_inspect() {
-  local seed="$1" image_index="$2" train_subset="$3" backbone="$4" \
-        sampler="$5" pct="$6" resize="$7" imagesize="$8"
+  local seed="$1" train_subset="$2" backbone="$3" \
+        sampler="$4" pct="$5" resize="$6" imagesize="$7"
+  shift 7
+  local indices=("$@")
 
   local tag
   if [[ "${sampler}" == "identity" ]]; then
@@ -77,18 +82,27 @@ run_inspect() {
     tag="p${pct}"
   fi
 
-  local output_path="${RESULTS_DIR}/inspect_celeba_hat_${sampler}_${tag}_s${seed}_ts${train_subset}_${backbone}_idx${image_index}.png"
+  # Le placeholder {idx} est remplacé côté Python par chaque index → chaque
+  # image atterrit dans son propre dossier results/idx<idx>/ (dossiers créés
+  # par le script). {idx} n'est PAS expansé par bash (pas de virgule/plage).
+  local output_path="${RESULTS_DIR}/idx{idx}/inspect_celeba_hat_${sampler}_${tag}_s${seed}_ts${train_subset}_${backbone}_idx{idx}.png"
   local log_group="inspect_heatmap_${sampler}_${tag}"
+
+  local idx_args=()
+  local i
+  for i in "${indices[@]}"; do
+    idx_args+=(--image_index "${i}")
+  done
 
   echo "=================================================================="
   echo "▶ seed=${seed} sampler=${sampler} percentage=${pct} train_subset=${train_subset}"
-  echo "  backbone=${backbone} resize=${resize} imagesize=${imagesize} image_index=${image_index}"
+  echo "  backbone=${backbone} resize=${resize} imagesize=${imagesize} images=${indices[*]}"
   echo "=================================================================="
 
   ./remote_run.sh bin/inspect_patchcore_celeba.py "${output_path}" \
     --gpu 0 \
     --seed "${seed}" \
-    --image_index "${image_index}" \
+    "${idx_args[@]}" \
     --train_subset "${train_subset}" \
     --backbone_name "${backbone}" \
     --sampler_name "${sampler}" \
@@ -99,14 +113,7 @@ run_inspect() {
     --log_group "${log_group}"
 }
 
-# Si aucun image_index explicite n'est fourni, on utilise le sentinel "random"
-# pour tirer un index aléatoire à CHAQUE run.
-index_list=("${IMAGE_INDICES[@]:-}")
-if [[ ${#IMAGE_INDICES[@]} -eq 0 ]]; then
-  index_list=("random")
-fi
-
-n_runs=0
+n_fits=0
 for seed in "${SEEDS[@]}"; do
   for train_subset in "${TRAIN_SUBSETS[@]}"; do
     for backbone in "${BACKBONE_NAMES[@]}"; do
@@ -121,16 +128,16 @@ for seed in "${SEEDS[@]}"; do
               pct_list=("${PERCENTAGES[@]}")
             fi
             for pct in "${pct_list[@]}"; do
-              for idx in "${index_list[@]}"; do
-                if [[ "${idx}" == "random" ]]; then
-                  image_index=$(( RANDOM % TEST_SPLIT_SIZE ))
-                else
-                  image_index="${idx}"
-                fi
-                run_inspect "${seed}" "${image_index}" "${train_subset}" \
-                  "${backbone}" "${sampler}" "${pct}" "${resize}" "${imagesize}"
-                n_runs=$(( n_runs + 1 ))
-              done
+              # Toutes les images sont évaluées sur un SEUL fit. Si aucun index
+              # explicite n'est fourni, on tire un index aléatoire pour ce fit.
+              if [[ ${#IMAGE_INDICES[@]} -eq 0 ]]; then
+                run_indices=($(( RANDOM % TEST_SPLIT_SIZE )))
+              else
+                run_indices=("${IMAGE_INDICES[@]}")
+              fi
+              run_inspect "${seed}" "${train_subset}" "${backbone}" \
+                "${sampler}" "${pct}" "${resize}" "${imagesize}" "${run_indices[@]}"
+              n_fits=$(( n_fits + 1 ))
             done
           done
         done
@@ -139,4 +146,4 @@ for seed in "${SEEDS[@]}"; do
   done
 done
 
-echo "✅  Sweep terminé (${n_runs} runs). Images dans ${RESULTS_DIR}/, runs loggés dans MLflow (projet ${LOG_PROJECT})."
+echo "✅  Sweep terminé (${n_fits} fits, chacun évalué sur ${#IMAGE_INDICES[@]:-1} image(s)). Images dans ${RESULTS_DIR}/, runs loggés dans MLflow (projet ${LOG_PROJECT})."

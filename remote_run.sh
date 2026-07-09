@@ -24,7 +24,7 @@ LOCAL_DIR="$HOME/dev/telecom/stage_1a/patchcore-inspection"
 # mais plafonnée à 2h de walltime et 1 job à la fois — largement suffisant
 # pour un run d'inspection ; augmenter SLURM_TIME si besoin pour un run plus long.
 SLURM_PARTITION="gpu_inter"
-SLURM_TIME="00:30:00"
+SLURM_TIME="02:00:00"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste
 # des arguments est transmis tel quel au script Python.

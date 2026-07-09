@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import click
@@ -17,6 +18,26 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 LOGGER = logging.getLogger(__name__)
 
 
+def _resolve_output_path(output_path, idx, n_images):
+    """Resolve the overlay path for one image_index and ensure its dir exists.
+
+    - If ``output_path`` contains ``{idx}`` it is substituted (lets the caller
+      route each image into its own folder, e.g. ``results/idx{idx}/...``).
+    - Else, when several images share one fit, ``_idx{idx}`` is inserted before
+      the extension so they don't overwrite each other.
+    - Else (single image, no placeholder) the path is used as-is.
+    """
+    if "{idx}" in output_path:
+        path = output_path.format(idx=idx)
+    elif n_images > 1:
+        base, ext = os.path.splitext(output_path)
+        path = "{}_idx{}{}".format(base, idx, ext)
+    else:
+        path = output_path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    return path
+
+
 @click.command()
 @click.argument("output_path", type=str)
 @click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
@@ -24,9 +45,12 @@ LOGGER = logging.getLogger(__name__)
 @click.option(
     "--image_index",
     type=int,
-    default=0,
+    default=(0,),
+    multiple=True,
     show_default=True,
-    help="Index into the balanced CelebA TEST split (839 hat + 839 no-hat).",
+    help="Index into the balanced CelebA TEST split (839 hat + 839 no-hat). "
+    "Repeatable: pass several --image_index to evaluate multiple images from a "
+    "single fit (the memory bank is identical for all of them).",
 )
 @click.option(
     "--train_subset",
@@ -86,10 +110,6 @@ def main(
     test_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TEST, seed=seed
     )
-    sample = test_dataset[image_index]
-    test_dataloader = torch.utils.data.DataLoader(
-        torch.utils.data.Subset(test_dataset, [image_index]), batch_size=1
-    )
 
     backbone = patchcore.backbones.load(backbone_name)
     backbone.name, backbone.seed = backbone_name, None
@@ -115,77 +135,90 @@ def main(
         nn_method=nn_method,
     )
 
-    # Log the exact torch/CUDA stack so runs from this machine vs. the server
-    # can be told apart (and version mismatches diagnosed) from the MLflow UI.
     device_is_cuda = device.type == "cuda"
-    mlflow_params = {
-        "seed": seed,
-        "image_index": image_index,
-        "image_anomaly_label": sample["anomaly"],
-        "train_subset": train_subset,
-        "backbone_name": backbone_name,
-        "sampler_name": sampler_name,
-        "coreset_pct": percentage,
-        "resize": resize,
-        "imagesize": imagesize,
-        "device": str(device),
-        "torch_version": torch.__version__,
-        "cuda_version": torch.version.cuda or "cpu",
-        "gpu_name": torch.cuda.get_device_name(device) if device_is_cuda else "cpu",
-    }
 
-    with patchcore.tracking.patchcore_run(
-        experiment=log_project, run_name=log_group, params=mlflow_params
-    ) as mlflow_run:
-        LOGGER.info("Fitting on %d no-hat images...", len(train_dataset))
-        patchcore_instance.fit(train_dataloader)
+    # Fit ONCE. The memory bank is identical for every test image, so we build
+    # it a single time and then evaluate each requested image_index against it
+    # instead of refitting per image.
+    LOGGER.info("Fitting on %d no-hat images...", len(train_dataset))
+    patchcore_instance.fit(train_dataloader)
 
-        LOGGER.info(
-            "Predicting on test image #%d (anomaly=%s)...", image_index, sample["anomaly"]
+    mean = np.array(train_dataset.dataset.transform_mean).reshape(-1, 1, 1)
+    std = np.array(train_dataset.dataset.transform_std).reshape(-1, 1, 1)
+
+    for idx in image_index:
+        sample = test_dataset[idx]
+        test_dataloader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(test_dataset, [idx]), batch_size=1
         )
-        # Time inference. CUDA kernels are async, so synchronize on both sides
-        # to measure real GPU time -- but only when actually on CUDA, otherwise
-        # torch.cuda.synchronize() raises on a CPU/MPS-only build (e.g. laptop).
-        if device_is_cuda:
-            torch.cuda.synchronize(device)
-        t0 = time.perf_counter()
-        scores, segmentations, _, _ = patchcore_instance.predict(test_dataloader)
-        if device_is_cuda:
-            torch.cuda.synchronize(device)
-        inference_seconds = time.perf_counter() - t0
+        out_path = _resolve_output_path(output_path, idx, len(image_index))
 
-        n_images = len(test_dataloader.dataset)
-        LOGGER.info(
-            "Inference on %d image(s) took %.3f s (%.1f ms/image).",
-            n_images,
-            inference_seconds,
-            1000.0 * inference_seconds / max(n_images, 1),
-        )
+        # Log the exact torch/CUDA stack so runs from this machine vs. the
+        # server can be told apart (and version mismatches diagnosed) in MLflow.
+        mlflow_params = {
+            "seed": seed,
+            "image_index": idx,
+            "image_anomaly_label": sample["anomaly"],
+            "train_subset": train_subset,
+            "backbone_name": backbone_name,
+            "sampler_name": sampler_name,
+            "coreset_pct": percentage,
+            "resize": resize,
+            "imagesize": imagesize,
+            "device": str(device),
+            "torch_version": torch.__version__,
+            "cuda_version": torch.version.cuda or "cpu",
+            "gpu_name": torch.cuda.get_device_name(device) if device_is_cuda else "cpu",
+        }
 
-        score, heatmap = scores[0], np.array(segmentations[0])
+        with patchcore.tracking.patchcore_run(
+            experiment=log_project, run_name=log_group, params=mlflow_params
+        ) as mlflow_run:
+            LOGGER.info(
+                "Predicting on test image #%d (anomaly=%s)...", idx, sample["anomaly"]
+            )
+            # Time inference. CUDA kernels are async, so synchronize on both
+            # sides to measure real GPU time -- but only when actually on CUDA,
+            # otherwise torch.cuda.synchronize() raises on a CPU/MPS-only build.
+            if device_is_cuda:
+                torch.cuda.synchronize(device)
+            t0 = time.perf_counter()
+            scores, segmentations, _, _ = patchcore_instance.predict(test_dataloader)
+            if device_is_cuda:
+                torch.cuda.synchronize(device)
+            inference_seconds = time.perf_counter() - t0
 
-        mean = np.array(train_dataset.dataset.transform_mean).reshape(-1, 1, 1)
-        std = np.array(train_dataset.dataset.transform_std).reshape(-1, 1, 1)
-        image = np.clip((sample["image"].numpy() * std + mean) * 255, 0, 255).astype(np.uint8)
-        image = image.transpose(1, 2, 0)
+            n_images = len(test_dataloader.dataset)
+            LOGGER.info(
+                "Inference on %d image(s) took %.3f s (%.1f ms/image).",
+                n_images,
+                inference_seconds,
+                1000.0 * inference_seconds / max(n_images, 1),
+            )
 
+            score, heatmap = scores[0], np.array(segmentations[0])
 
-        plt.imshow(image)
-        plt.imshow(heatmap, cmap="jet", alpha=0.5, vmin=0, vmax=1)
-        plt.axis("off")
-        plt.title("anomaly={} score={:.3f}".format(sample["anomaly"], score))
-        plt.savefig(output_path, bbox_inches="tight")
-        plt.close()
-        LOGGER.info("Saved overlay to %s", output_path)
+            image = np.clip((sample["image"].numpy() * std + mean) * 255, 0, 255).astype(
+                np.uint8
+            )
+            image = image.transpose(1, 2, 0)
 
-        mlflow_run.log_metrics(
-            {
-                "anomaly_score": score,
-                "inference_seconds": inference_seconds,
-                "inference_ms_per_image": 1000.0 * inference_seconds / max(n_images, 1),
-            }
-        )
-        mlflow_run.log_artifacts(output_path)
+            plt.imshow(image)
+            plt.imshow(heatmap, cmap="jet", alpha=0.5, vmin=0, vmax=10)
+            plt.axis("off")
+            plt.title("anomaly={} score={:.3f}".format(sample["anomaly"], score))
+            plt.savefig(out_path, bbox_inches="tight")
+            plt.close()
+            LOGGER.info("Saved overlay to %s", out_path)
+
+            mlflow_run.log_metrics(
+                {
+                    "anomaly_score": score,
+                    "inference_seconds": inference_seconds,
+                    "inference_ms_per_image": 1000.0 * inference_seconds / max(n_images, 1),
+                }
+            )
+            mlflow_run.log_artifacts(out_path)
 
 
 if __name__ == "__main__":

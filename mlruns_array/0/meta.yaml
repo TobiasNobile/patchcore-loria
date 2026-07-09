@@ -1,0 +1,9 @@
+artifact_location: file:///usr/users/demo_arthur/nobile_tob/patchcore-inspection/mlruns_array/0
+creation_time: 1783515920844
+effective_trace_archival_retention: null
+experiment_id: '0'
+last_update_time: 1783515920844
+lifecycle_stage: active
+name: Default
+trace_location: null
+workspace: default

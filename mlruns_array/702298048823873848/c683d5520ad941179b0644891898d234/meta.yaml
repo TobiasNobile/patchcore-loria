@@ -1,0 +1,14 @@
+artifact_uri: file:///usr/users/demo_arthur/nobile_tob/patchcore-inspection/mlruns_array/702298048823873848/c683d5520ad941179b0644891898d234/artifacts
+end_time: 1783517367131
+entry_point_name: ''
+experiment_id: '702298048823873848'
+lifecycle_stage: active
+run_id: c683d5520ad941179b0644891898d234
+run_name: inspect_heatmap_approx_greedy_coreset_p0.7
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1783517363603
+status: 3
+tags: []
+user_id: nobile_tob
