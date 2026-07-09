@@ -7,7 +7,7 @@ import click
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.stats import wasserstein_distance
+from scipy.stats import wasserstein_distance, ttest_ind
 
 import patchcore.backbones
 import patchcore.common
@@ -52,6 +52,26 @@ def normalized_wasserstein(scores_a, scores_b):
     w1_normalized = w1 / pooled_std if pooled_std > 0 else float("nan")
     return {"w1": w1, "w1_normalized": w1_normalized, "pooled_std": pooled_std}
 
+def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[float, bool]:
+    """
+    Runs a scipy unilateral t-test between distributions of scores of good labels (ex: no-hat) and scores of anomaly labels (ex: hat).
+    Tests if mean of anomaly scores is statistically greater than mean of good score.
+    Confidence level : 95%
+    equal_var=False : test de Welch (ne suppose pas des variances égales).
+
+    Args:
+        - scores_good: global scores of good images (no anomaly)
+        - scores_anomaly : global scores of anomaly images
+    
+    Returns: tuple
+        - p-value: computed from t-test
+        - True if mean of anomaly scores statistically greater (p-value < 0.05), else False
+    """
+
+    res = ttest_ind(scores_good, scores_anomaly, alternative="less", equal_var=False)
+    p_value = float(res.pvalue)
+    greater_anomaly_scores = p_value < 0.05
+    return p_value, greater_anomaly_scores
 
 @click.command()
 @click.argument("output_path", type=str)
@@ -223,6 +243,7 @@ def main(
 
     # W1 normalisée entre no-hat et hat : l'écart d'amplitude, sans échelle.
     wass = normalized_wasserstein(normal_scores, anomaly_scores)
+    p_value, _ = t_test_scores(normal_scores, anomaly_scores)
 
     # Histogramme superposé, bins PARTAGÉS.
     lo, hi = float(sampled_scores.min()), float(sampled_scores.max())
@@ -245,7 +266,7 @@ def main(
         sampler_name, percentage
     )
     plt.title("{}  |  ts={}  |  W1 norm={:.3f}".format(
-        tag, train_subset, wass["w1_normalized"]
+        tag, train_subset, wass["w1_normalized"], p_value
     ))
     plt.legend()
     plt.grid(True, alpha=0.2)
@@ -262,6 +283,7 @@ def main(
     metrics = {
         "w1_normalized": wass["w1_normalized"],
         "w1": wass["w1"],
+        "p_value": p_value,
         "pooled_std": wass["pooled_std"],
         "auroc": auroc,
         "scoring_seconds": scoring_seconds,
