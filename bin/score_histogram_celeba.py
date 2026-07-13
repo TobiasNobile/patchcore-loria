@@ -192,7 +192,7 @@ def main(
         target_embed_dimension=1024,
         patchsize=3,
         featuresampler=sampler,
-        anomaly_scorer_num_nn=1, # 1 seul plus proche voisin
+        anomaly_scorer_num_nn=3, # 1 seul plus proche voisin
         nn_method=nn_method,
     )
 

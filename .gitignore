@@ -8,3 +8,4 @@ mlruns_array/
 mlruns_remote.db
 .env
 results
+models/

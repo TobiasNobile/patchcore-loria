@@ -53,6 +53,15 @@ def _resolve_output_path(output_path, idx, n_images):
     "single fit (the memory bank is identical for all of them).",
 )
 @click.option(
+    "--n_per_class",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Instead of --image_index, draw n hat and n no-hat images at random from "
+    "the TEST split (equal counts) and overlay a heatmap on each. Capped at the "
+    "number available per class (~839).",
+)
+@click.option(
     "--train_subset",
     type=int,
     default=2000,
@@ -78,6 +87,7 @@ def main(
     gpu,
     seed,
     image_index,
+    n_per_class,
     train_subset,
     backbone_name,
     sampler_name,
@@ -110,6 +120,30 @@ def main(
     test_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TEST, seed=seed
     )
+
+    if n_per_class:
+        # Labels are known without inference, so the hat / no-hat indices are
+        # drawn up front rather than by scoring images and discarding some.
+        labels = np.asarray(test_dataset.labels, dtype=int)
+        normal_idx = np.where(labels == 0)[0]
+        anomaly_idx = np.where(labels == 1)[0]
+        n = min(n_per_class, len(normal_idx), len(anomaly_idx))
+        if n < n_per_class:
+            LOGGER.warning(
+                "n_per_class=%d requested but only %d no-hat / %d hat available "
+                "=> using n=%d per class.",
+                n_per_class, len(normal_idx), len(anomaly_idx), n,
+            )
+        rng = np.random.RandomState(seed)
+        image_index = [
+            int(i)
+            for i in np.concatenate(
+                [
+                    rng.choice(normal_idx, n, replace=False),
+                    rng.choice(anomaly_idx, n, replace=False),
+                ]
+            )
+        ]
 
     backbone = patchcore.backbones.load(backbone_name)
     backbone.name, backbone.seed = backbone_name, None

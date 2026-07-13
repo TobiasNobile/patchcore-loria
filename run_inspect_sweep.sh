@@ -48,10 +48,10 @@ TEST_SPLIT_SIZE=1678
 # ======================================================================
 
 SEEDS=(42)
-TRAIN_SUBSETS=(2000 10000)
+TRAIN_SUBSETS=(2000)
 BACKBONE_NAMES=(wideresnet50)
 SAMPLERS=(identity approx_greedy_coreset)
-PERCENTAGES=(0.01 0.1 0.2 0.5 0.7)
+PERCENTAGES=(0.1)
 RESIZES=(256)
 IMAGESIZES=(224)
 
