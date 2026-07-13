@@ -329,18 +329,25 @@ train_dataset = CelebADataset(split=DatasetSplit.TRAIN)               # 154,731 
 test_dataset = CelebADataset(split=DatasetSplit.TEST, seed=0)         # 839 + 839 balanced images
 ```
 
-### Running PatchCore (fit only, no evaluation yet)
+### Running PatchCore on CelebA
 
-`bin/run_patchcore_celeba.py` fits a PatchCore memory bank on the one-class (no-hat) CelebA train
-set — no predict/evaluation step, since there is no pixel-level ground-truth mask yet:
+Fitting and inference are two separate scripts, because they have very different costs. Building the
+memory bank is dominated by the coreset — a sequential selection whose iteration count grows with
+`TRAIN_SUBSET` × `PERCENTAGE` — and it only has to happen once. Scoring an image against a saved bank
+is the fast half, and the one that has to run in real time. Both scripts hold their hyperparameters
+in a `CONFIG` block at the top of the file; edit it and run, no flags to remember.
 
 ```shell
-python bin/run_patchcore_celeba.py --gpu 0 --seed 0 --save_patchcore_model \
---log_project CelebA_Results results \
--b wideresnet50 -le layer2 -le layer3 --faiss_on_gpu \
---pretrain_embed_dimension 1024 --target_embed_dimension 1024 --anomaly_scorer_num_nn 1 --patchsize 3 \
---sampler_name approx_greedy_coreset -p 0.1 --resize 256 --imagesize 224
+python bin/fit_memory_bank_celeba.py                    # once: writes models/celeba/<tag>/
+python bin/infer_heatmap_celeba.py                      # heatmap overlay, default image
+python bin/infer_heatmap_celeba.py --image_index 900    # any other test image
 ```
+
+`<tag>` encodes the config (backbone, sampler, percentage, train subset, seed), so different configs
+never overwrite each other, and each bank carries a `fit_config.json` recording how it was built.
+`infer_heatmap_celeba.py` reads `resize` / `imagesize` back from that file rather than restating
+them: a query embedded differently from the bank it is searched against would give meaningless
+distances.
 
 Pixel-level evaluation (real "hat" segmentation ground-truth, sourced from CelebAMask-HQ) is a
 follow-up step, not yet wired in.

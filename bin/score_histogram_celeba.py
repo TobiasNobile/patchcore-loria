@@ -131,7 +131,7 @@ def main(
     (`n_per_class`, échantillonné aléatoirement, plafonné au dispo). Les deux
     groupes sont des données de TEST. Loggé dans MLflow (AUROC + means + figure)."""
     device = patchcore.utils.set_torch_device(gpu)
-    patchcore.utils.fix_seeds(seed, device)
+    patchcore.utils.fix_seeds(seed)
 
     train_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TRAIN, seed=seed
@@ -265,7 +265,7 @@ def main(
     tag = "identity" if sampler_name == "identity" else "{} p={}".format(
         sampler_name, percentage
     )
-    plt.title("{}  |  ts={}  |  W1 norm={:.3f}".format(
+    plt.title("{}  |  ts={}  |  W1 norm={:.3f}  |  p={:.2e}".format(
         tag, train_subset, wass["w1_normalized"], p_value
     ))
     plt.legend()

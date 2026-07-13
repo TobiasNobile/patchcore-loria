@@ -93,7 +93,7 @@ def build_sampler(device):
 
 def main():
     device = patchcore.utils.set_torch_device(GPU)
-    patchcore.utils.fix_seeds(SEED, device)
+    patchcore.utils.fix_seeds(SEED)
 
     train_dataset = CelebADataset(
         resize=RESIZE, imagesize=IMAGESIZE, split=DatasetSplit.TRAIN, seed=SEED

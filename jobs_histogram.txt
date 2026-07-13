@@ -1,6 +1,0 @@
-42	2000	wideresnet50	identity	0.1	256	224
-42	2000	wideresnet50	approx_greedy_coreset	0.01	256	224
-42	2000	wideresnet50	approx_greedy_coreset	0.1	256	224
-42	2000	wideresnet50	approx_greedy_coreset	0.2	256	224
-42	2000	wideresnet50	approx_greedy_coreset	0.5	256	224
-42	2000	wideresnet50	approx_greedy_coreset	0.7	256	224

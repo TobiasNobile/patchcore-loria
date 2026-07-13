@@ -78,7 +78,7 @@ def run(
             )
         )
 
-        patchcore.utils.fix_seeds(seed, device)
+        patchcore.utils.fix_seeds(seed)
 
         dataset_name = dataloaders["training"].name
 
@@ -108,7 +108,7 @@ def run(
                 for i, PatchCore in enumerate(PatchCore_list):
                     torch.cuda.empty_cache()
                     if PatchCore.backbone.seed is not None:
-                        patchcore.utils.fix_seeds(PatchCore.backbone.seed, device)
+                        patchcore.utils.fix_seeds(PatchCore.backbone.seed)
                     LOGGER.info(
                         "Training models ({}/{})".format(i + 1, len(PatchCore_list))
                     )

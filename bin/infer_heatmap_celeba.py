@@ -1,22 +1,24 @@
 """Overlay the PatchCore anomaly heatmap on one CelebA test image.
 
-Standalone: no CLI, edit the CONFIG block below and run the script. Loads a
-memory bank built by bin/fit_memory_bank_celeba.py -- no fitting, no coreset, so
-this is the fast half of PatchCore and the one that has to run in real time.
+Everything lives in the CONFIG block below; the only option is --image_index, so
+the script runs bare. Loads a memory bank built by bin/fit_memory_bank_celeba.py
+-- no fitting, no coreset, so this is the fast half of PatchCore and the one that
+has to run in real time.
 
-    python bin/fit_memory_bank_celeba.py   # once, offline
-    python bin/infer_heatmap_celeba.py     # as often as you like
+    python bin/fit_memory_bank_celeba.py                    # once, offline
+    python bin/infer_heatmap_celeba.py                      # default image
+    python bin/infer_heatmap_celeba.py --image_index 900    # any other one
 
 Preprocessing (resize / imagesize) is read back from the bank's fit_config.json
 rather than restated here: a query embedded differently from the bank it is
 searched against would give meaningless distances.
 """
-
 import json
 import logging
 import os
 import time
 
+import click
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -35,7 +37,7 @@ LOGGER = logging.getLogger(__name__)
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 
 # Index into the balanced CelebA TEST split (839 hat + 839 no-hat).
-IMAGE_INDEX = 0
+IMAGE_INDEX_DEFAULT = 0
 
 OUTPUT_PATH = "results/heatmaps/overlay_idx{idx}.png"
 
@@ -49,14 +51,20 @@ HEATMAP_VMIN = 0
 HEATMAP_VMAX = 10
 HEATMAP_ALPHA = 0.5
 
-FAISS_ON_GPU = True
+FAISS_ON_GPU = False
 FAISS_NUM_WORKERS = 4
 # --------------------------------------------------------------------------- #
 
-
 def load_bank(device):
     """Rebuild a PatchCore from a saved bank, plus the config it was fit with."""
-    with open(os.path.join(BANK_DIR, "fit_config.json")) as fh:
+    config_path = os.path.join(BANK_DIR, "fit_config.json")
+    if not os.path.exists(config_path):
+        raise SystemExit(
+            "No memory bank at {}. Build one first with "
+            "`python bin/fit_memory_bank_celeba.py`, or point BANK_DIR at an "
+            "existing bank.".format(BANK_DIR)
+        )
+    with open(config_path) as fh:
         fit_config = json.load(fh)
 
     patchcore_instance = patchcore.patchcore.PatchCore(device)
@@ -73,10 +81,17 @@ def load_bank(device):
     )
     return patchcore_instance, fit_config
 
-
-def main():
+@click.command()
+@click.option(
+    "--image_index",
+    type=int,
+    default=IMAGE_INDEX_DEFAULT,
+    show_default=True,
+    help="Index into the balanced CelebA TEST split (839 hat + 839 no-hat).",
+)
+def main(image_index):
     device = patchcore.utils.set_torch_device(GPU)
-    patchcore.utils.fix_seeds(SEED, device)
+    patchcore.utils.fix_seeds(SEED)
 
     patchcore_instance, fit_config = load_bank(device)
 
@@ -86,9 +101,9 @@ def main():
         split=DatasetSplit.TEST,
         seed=fit_config["seed"],
     )
-    sample = test_dataset[IMAGE_INDEX]
+    sample = test_dataset[image_index]
     dataloader = torch.utils.data.DataLoader(
-        torch.utils.data.Subset(test_dataset, [IMAGE_INDEX]), batch_size=1
+        torch.utils.data.Subset(test_dataset, [image_index]), batch_size=1
     )
 
     device_is_cuda = device.type == "cuda"
@@ -103,7 +118,7 @@ def main():
     score, heatmap = scores[0], np.array(segmentations[0])
     LOGGER.info(
         "Image #%d (anomaly=%s): score=%.3f, inference=%.1f ms.",
-        IMAGE_INDEX,
+        image_index,
         sample["anomaly"],
         score,
         1000.0 * inference_seconds,
@@ -116,7 +131,7 @@ def main():
     )
     image = image.transpose(1, 2, 0)
 
-    out_path = OUTPUT_PATH.format(idx=IMAGE_INDEX)
+    out_path = OUTPUT_PATH.format(idx=image_index)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     plt.imshow(image)

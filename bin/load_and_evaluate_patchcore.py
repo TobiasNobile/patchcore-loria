@@ -62,7 +62,7 @@ def run(methods, results_path, gpu, seed, save_segmentation_images):
             )
         )
 
-        patchcore.utils.fix_seeds(seed, device)
+        patchcore.utils.fix_seeds(seed)
 
         dataset_name = dataloaders["testing"].name
 

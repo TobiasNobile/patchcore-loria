@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# run_inspect_array.sh — Version PARALLÈLE de run_inspect_sweep.sh.
+# run_inspect_array.sh — Sweep d'hyperparamètres en PARALLÈLE (job array SLURM).
 #
-# Au lieu d'enchaîner les fits un par un via srun sur gpu_inter (partition
+# Plutôt que d'enchaîner les fits un par un via srun sur gpu_inter (partition
 # interactive plafonnée à 1 job), on soumet UN job array SLURM sur la partition
 # batch `gpu_prod_long`. Chaque tâche de l'array = 1 fit PatchCore (une
 # combinaison seed/ts/sampler/pct), évalué sur toutes les IMAGE_INDICES.
@@ -50,7 +50,7 @@ CONCURRENCY=4                     # nb max de tâches (GPU) simultanées — aju
 # n'émet donc PAS de combinaison identity au-delà de ce train_subset.
 IDENTITY_MAX_TS=2000
 
-# ─── CONFIG sweep (mêmes tableaux que run_inspect_sweep.sh) ────────────────
+# ─── CONFIG sweep (produit cartésien complet des tableaux ci-dessous) ──────
 SEEDS=(42)
 TRAIN_SUBSETS=(2000 5000)   # ts=10000 infaisable : ~22,5Go de features > 30Go/nœud
                             # (thrashing/OOM à ~84% de "Computing support features").

@@ -102,7 +102,7 @@ def main(
     anomaly heatmap on one CelebA TEST image to eyeball whether it lights up
     on the hat. Logged to MLflow (params + overlay artifact + score)."""
     device = patchcore.utils.set_torch_device(gpu)
-    patchcore.utils.fix_seeds(seed, device)
+    patchcore.utils.fix_seeds(seed)
 
     train_dataset = CelebADataset(
         resize=resize, imagesize=imagesize, split=DatasetSplit.TRAIN, seed=seed
