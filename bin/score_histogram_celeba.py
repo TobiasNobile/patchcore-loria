@@ -1,3 +1,16 @@
+"""Compare les scores d'anomalie des images NO-HAT et HAT du split TEST.
+
+Charge une banque mémoire construite par bin/fit_memory_bank_celeba.py — aucun
+fit ici. Les hyperparamètres du fit (backbone, sampler, percentage, train_subset,
+resize/imagesize, seed) sont relus dans le fit_config.json de la banque : une
+image encodée autrement que la banque contre laquelle on la compare donnerait des
+distances qui ne veulent rien dire, et le ferait silencieusement.
+
+    python bin/fit_memory_bank_celeba.py                     # une fois, hors ligne
+    python bin/score_histogram_celeba.py                     # histogramme + stats
+    python bin/score_histogram_celeba.py --n_per_class 200   # échantillon plus petit
+"""
+
 import json
 import logging
 import os
@@ -9,11 +22,8 @@ import numpy as np
 import torch
 from scipy.stats import wasserstein_distance, ttest_ind
 
-import patchcore.backbones
-import patchcore.common
+import patchcore.banks
 import patchcore.metrics
-import patchcore.patchcore
-import patchcore.sampler
 import patchcore.tracking
 import patchcore.utils
 from patchcore.datasets.celeba import CelebADataset, DatasetSplit
@@ -23,6 +33,31 @@ LOGGER = logging.getLogger(__name__)
 # Couleurs reprises de l'exemple (bleu = normal / in-dist, orange = anomalie / OOD).
 COLOR_NORMAL = "#5B8FB9"
 COLOR_ANOMALY = "#E8A33D"
+
+# --------------------------------------------------------------------------- #
+# CONFIG — édite ici, puis lance le script.
+# --------------------------------------------------------------------------- #
+# Dossier écrit par bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
+BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
+
+OUTPUT_PATH = "results/histograms/hist_celeba.png"
+
+# Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. Plafonné au
+# nombre d'images disponibles par classe dans le test (la classe hat n'a qu'~839
+# images).
+N_PER_CLASS_DEFAULT = 1000
+
+GPU = [0]  # [] force le CPU. Retombe sur CPU sur une machine sans CUDA de toute façon.
+BINS = 50
+TEST_BATCH_SIZE = 8
+NUM_WORKERS = 8
+
+FAISS_ON_GPU = False
+FAISS_NUM_WORKERS = 4
+
+LOG_PROJECT = "CelebA_Results"
+LOG_GROUP = "score_histogram"
+# --------------------------------------------------------------------------- #
 
 
 def normalized_wasserstein(scores_a, scores_b):
@@ -52,6 +87,7 @@ def normalized_wasserstein(scores_a, scores_b):
     w1_normalized = w1 / pooled_std if pooled_std > 0 else float("nan")
     return {"w1": w1, "w1_normalized": w1_normalized, "pooled_std": pooled_std}
 
+
 def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[float, bool]:
     """
     Runs a scipy unilateral t-test between distributions of scores of good labels (ex: no-hat) and scores of anomaly labels (ex: hat).
@@ -62,7 +98,7 @@ def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[
     Args:
         - scores_good: global scores of good images (no anomaly)
         - scores_anomaly : global scores of anomaly images
-    
+
     Returns: tuple
         - p-value: computed from t-test
         - True if mean of anomaly scores statistically greater (p-value < 0.05), else False
@@ -73,78 +109,38 @@ def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[
     greater_anomaly_scores = p_value < 0.05
     return p_value, greater_anomaly_scores
 
+
 @click.command()
-@click.argument("output_path", type=str)
-@click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
-@click.option("--seed", type=int, default=42, show_default=True)
-@click.option(
-    "--train_subset",
-    type=int,
-    default=2000,
-    show_default=True,
-    help="Nombre d'images no-hat du split TRAIN servant à construire la banque.",
-)
 @click.option(
     "--n_per_class",
     type=int,
-    default=1000,
+    default=N_PER_CLASS_DEFAULT,
     show_default=True,
     help="Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. "
     "Plafonné au nombre d'images disponibles par classe dans le test "
     "(la classe hat n'a qu'~839 images).",
 )
-@click.option("--backbone_name", "-b", type=str, default="wideresnet50", show_default=True)
-@click.option(
-    "--sampler_name",
-    type=click.Choice(["identity", "greedy_coreset", "approx_greedy_coreset"]),
-    default="approx_greedy_coreset",
-    show_default=True,
-)
-@click.option("--percentage", "-p", type=float, default=0.1, show_default=True)
-@click.option("--resize", type=int, default=256, show_default=True)
-@click.option("--imagesize", type=int, default=224, show_default=True)
-@click.option("--num_workers", type=int, default=8, show_default=True)
-@click.option("--test_batch_size", type=int, default=8, show_default=True)
-@click.option("--bins", type=int, default=50, show_default=True)
-@click.option("--log_project", type=str, default="CelebA_Results", show_default=True)
-@click.option("--log_group", type=str, default="score_histogram", show_default=True)
-def main(
-    output_path,
-    gpu,
-    seed,
-    train_subset,
-    n_per_class,
-    backbone_name,
-    sampler_name,
-    percentage,
-    resize,
-    imagesize,
-    num_workers,
-    test_batch_size,
-    bins,
-    log_project,
-    log_group,
-):
-    """Fit PatchCore sur `train_subset` images no-hat, score le split TEST, puis
-    superpose la distribution des scores d'anomalie des images NO-HAT (normal,
-    bleu) et HAT (anomalie, orange) — avec le MÊME effectif par classe
-    (`n_per_class`, échantillonné aléatoirement, plafonné au dispo). Les deux
-    groupes sont des données de TEST. Loggé dans MLflow (AUROC + means + figure)."""
-    device = patchcore.utils.set_torch_device(gpu)
+def main(n_per_class):
+    """Score le split TEST contre une banque déjà construite, puis superpose la
+    distribution des scores d'anomalie des images NO-HAT (normal, bleu) et HAT
+    (anomalie, orange) — avec le MÊME effectif par classe (`n_per_class`,
+    échantillonné aléatoirement, plafonné au dispo). Loggé dans MLflow (AUROC +
+    means + figure)."""
+    device = patchcore.utils.set_torch_device(GPU)
+
+    patchcore_instance, fit_config = patchcore.banks.load_bank(
+        BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
+    )
+    # Le seed de la banque pilote aussi le sous-échantillonnage équilibré du
+    # split TEST : on reste sur les mêmes images d'une analyse à l'autre.
+    seed = fit_config["seed"]
     patchcore.utils.fix_seeds(seed)
 
-    train_dataset = CelebADataset(
-        resize=resize, imagesize=imagesize, split=DatasetSplit.TRAIN, seed=seed
-    )
-    train_dataset = torch.utils.data.Subset(train_dataset, range(train_subset))
-    train_dataset.imagesize = (3, imagesize, imagesize)
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=8, shuffle=False,
-        num_workers=num_workers, pin_memory=True,   
-    )
-
     test_dataset = CelebADataset(
-        resize=resize, imagesize=imagesize, split=DatasetSplit.TEST, seed=seed
+        resize=fit_config["resize"],
+        imagesize=fit_config["imagesize"],
+        split=DatasetSplit.TEST,
+        seed=seed,
     )
 
     # On connaît les labels (hat/no-hat) SANS inférence -> on tire n index par
@@ -166,54 +162,24 @@ def main(
         rng.choice(anomaly_idx, n, replace=False),
     ])
     test_subset = torch.utils.data.Subset(test_dataset, selected_idx.tolist())
-    test_subset.imagesize = (3, imagesize, imagesize)
     test_dataloader = torch.utils.data.DataLoader(
-        test_subset, batch_size=test_batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
-    )
-
-    backbone = patchcore.backbones.load(backbone_name)
-    backbone.name, backbone.seed = backbone_name, None
-    nn_method = patchcore.common.FaissNN(False, 4)
-    if sampler_name == "identity":
-        sampler = patchcore.sampler.IdentitySampler()
-    elif sampler_name == "greedy_coreset":
-        sampler = patchcore.sampler.GreedyCoresetSampler(percentage, device)
-    else:
-        sampler = patchcore.sampler.ApproximateGreedyCoresetSampler(percentage, device)
-
-    patchcore_instance = patchcore.patchcore.PatchCore(device)
-    patchcore_instance.load(
-        backbone=backbone,
-        layers_to_extract_from=["layer2", "layer3"],
-        device=device,
-        input_shape=(3, imagesize, imagesize),
-        pretrain_embed_dimension=1024,
-        target_embed_dimension=1024,
-        patchsize=3,
-        featuresampler=sampler,
-        anomaly_scorer_num_nn=3, # 1 seul plus proche voisin
-        nn_method=nn_method,
+        test_subset, batch_size=TEST_BATCH_SIZE, shuffle=False,
+        num_workers=NUM_WORKERS, pin_memory=device.type == "cuda",
     )
 
     device_is_cuda = device.type == "cuda"
     mlflow_params = {
-        "seed": seed,
-        "train_subset": train_subset,
+        "bank_dir": BANK_DIR,
         "n_per_class_requested": n_per_class,
-        "backbone_name": backbone_name,
-        "sampler_name": sampler_name,
-        "coreset_pct": percentage,
-        "resize": resize,
-        "imagesize": imagesize,
         "device": str(device),
         "torch_version": torch.__version__,
         "cuda_version": torch.version.cuda or "cpu",
         "gpu_name": torch.cuda.get_device_name(device) if device_is_cuda else "cpu",
+        **{k: fit_config[k] for k in (
+            "seed", "train_subset", "backbone_name", "sampler_name",
+            "coreset_pct", "resize", "imagesize", "memory_bank_size",
+        )},
     }
-
-    LOGGER.info("Fitting on %d no-hat images...", len(train_dataset))
-    patchcore_instance.fit(train_dataloader)
 
     LOGGER.info("Scoring %d test images (n=%d par classe)...", 2 * n, n)
     if device_is_cuda:
@@ -249,7 +215,7 @@ def main(
     lo, hi = float(sampled_scores.min()), float(sampled_scores.max())
     if hi <= lo:
         hi = lo + 1e-6
-    edges = np.linspace(lo, hi, bins + 1)
+    edges = np.linspace(lo, hi, BINS + 1)
 
     plt.figure(figsize=(8, 5))
     plt.hist(
@@ -262,19 +228,20 @@ def main(
     )
     plt.xlabel("Score d'anomalie")
     plt.ylabel("Nombre d'instances")
+    sampler_name, percentage = fit_config["sampler_name"], fit_config["coreset_pct"]
     tag = "identity" if sampler_name == "identity" else "{} p={}".format(
         sampler_name, percentage
     )
     plt.title("{}  |  ts={}  |  W1 norm={:.3f}  |  p={:.2e}".format(
-        tag, train_subset, wass["w1_normalized"], p_value
+        tag, fit_config["train_subset"], wass["w1_normalized"], p_value
     ))
     plt.legend()
     plt.grid(True, alpha=0.2)
 
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    plt.savefig(output_path, bbox_inches="tight", dpi=120)
+    os.makedirs(os.path.dirname(OUTPUT_PATH) or ".", exist_ok=True)
+    plt.savefig(OUTPUT_PATH, bbox_inches="tight", dpi=120)
     plt.close()
-    LOGGER.info("Saved histogram to %s", output_path)
+    LOGGER.info("Saved histogram to %s", OUTPUT_PATH)
 
     # Métriques : sidecar JSON GARANTI (à côté du PNG) + logging MLflow
     # BEST-EFFORT. Le file store MLflow sur NFS lève un "Stale file handle"
@@ -293,21 +260,21 @@ def main(
         "n_normal_available": int(len(normal_idx)),
         "n_anomaly_available": int(len(anomaly_idx)),
     }
-    sidecar = os.path.splitext(output_path)[0] + ".json"
+    sidecar = os.path.splitext(OUTPUT_PATH)[0] + ".json"
     with open(sidecar, "w") as fh:
         json.dump({**mlflow_params, **metrics}, fh, indent=2)
     LOGGER.info("Saved metrics to %s", sidecar)
 
     try:
         with patchcore.tracking.patchcore_run(
-            experiment=log_project, run_name=log_group, params=mlflow_params
+            experiment=LOG_PROJECT, run_name=LOG_GROUP, params=mlflow_params
         ) as mlflow_run:
             mlflow_run.log_metrics(metrics)
-            mlflow_run.log_artifacts(output_path)
+            mlflow_run.log_artifacts(OUTPUT_PATH)
     except Exception as exc:  # noqa: BLE001 - MLflow ne doit jamais tuer le run
         LOGGER.warning(
             "Logging MLflow échoué (%s) — figure et métriques déjà sauvées (%s, %s).",
-            exc, output_path, sidecar,
+            exc, OUTPUT_PATH, sidecar,
         )
 
 

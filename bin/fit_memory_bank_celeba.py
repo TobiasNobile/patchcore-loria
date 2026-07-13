@@ -15,7 +15,6 @@ Writes to MODELS_DIR/<tag>/:
 other and re-running an identical config is a no-op you can skip.
 """
 
-import json
 import logging
 import os
 import time
@@ -24,6 +23,7 @@ import numpy as np
 import torch
 
 import patchcore.backbones
+import patchcore.banks
 import patchcore.common
 import patchcore.patchcore
 import patchcore.sampler
@@ -144,10 +144,6 @@ def main():
         bank_size,
     )
 
-    save_path = os.path.join(MODELS_DIR, build_tag())
-    os.makedirs(save_path, exist_ok=True)
-    patchcore_instance.save_to_path(save_path)
-
     config = {
         "seed": SEED,
         "train_subset": TRAIN_SUBSET,
@@ -169,10 +165,9 @@ def main():
         "feature_dim": int(np.asarray(bank).shape[1]),
         "fit_seconds": fit_seconds,
     }
-    with open(os.path.join(save_path, "fit_config.json"), "w") as fh:
-        json.dump(config, fh, indent=2)
-
-    LOGGER.info("Saved memory bank to %s", save_path)
+    patchcore.banks.save_bank(
+        patchcore_instance, os.path.join(MODELS_DIR, build_tag()), config
+    )
 
 
 if __name__ == "__main__":

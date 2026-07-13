@@ -13,7 +13,6 @@ Preprocessing (resize / imagesize) is read back from the bank's fit_config.json
 rather than restated here: a query embedded differently from the bank it is
 searched against would give meaningless distances.
 """
-import json
 import logging
 import os
 import time
@@ -23,8 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import patchcore.common
-import patchcore.patchcore
+import patchcore.banks
 import patchcore.utils
 from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 
@@ -55,32 +53,6 @@ FAISS_ON_GPU = False
 FAISS_NUM_WORKERS = 4
 # --------------------------------------------------------------------------- #
 
-def load_bank(device):
-    """Rebuild a PatchCore from a saved bank, plus the config it was fit with."""
-    config_path = os.path.join(BANK_DIR, "fit_config.json")
-    if not os.path.exists(config_path):
-        raise SystemExit(
-            "No memory bank at {}. Build one first with "
-            "`python bin/fit_memory_bank_celeba.py`, or point BANK_DIR at an "
-            "existing bank.".format(BANK_DIR)
-        )
-    with open(config_path) as fh:
-        fit_config = json.load(fh)
-
-    patchcore_instance = patchcore.patchcore.PatchCore(device)
-    patchcore_instance.load_from_path(
-        BANK_DIR, device, patchcore.common.FaissNN(FAISS_ON_GPU, FAISS_NUM_WORKERS)
-    )
-    LOGGER.info(
-        "Loaded bank from %s (%d patch features, %s p=%s, fit on %d images).",
-        BANK_DIR,
-        fit_config["memory_bank_size"],
-        fit_config["sampler_name"],
-        fit_config["coreset_pct"],
-        fit_config["n_train_images"],
-    )
-    return patchcore_instance, fit_config
-
 @click.command()
 @click.option(
     "--image_index",
@@ -93,7 +65,9 @@ def main(image_index):
     device = patchcore.utils.set_torch_device(GPU)
     patchcore.utils.fix_seeds(SEED)
 
-    patchcore_instance, fit_config = load_bank(device)
+    patchcore_instance, fit_config = patchcore.banks.load_bank(
+        BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
+    )
 
     test_dataset = CelebADataset(
         resize=fit_config["resize"],

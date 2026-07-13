@@ -4,10 +4,10 @@
 # là-bas, puis rapatrie les résultats générés.
 #
 # Usage:
-#   ./remote_run.sh                                    # lance le script par défaut
-#   ./remote_run.sh bin/run_patchcore.py                # lance un autre script
-#   ./remote_run.sh bin/inspect_patchcore_celeba.py --train_subset 20 --image_index 5
-#                                                        # arguments transmis au script Python
+#   ./remote_run.sh                                     # lance le script par défaut
+#   ./remote_run.sh bin/fit_memory_bank_celeba.py       # construit la banque mémoire
+#   ./remote_run.sh bin/infer_heatmap_celeba.py --image_index 900
+#                                                       # arguments transmis au script Python
 #
 set -euo pipefail
 
@@ -28,7 +28,7 @@ SLURM_TIME="02:00:00"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste
 # des arguments est transmis tel quel au script Python.
-SCRIPT="${1:-bin/inspect_patchcore_celeba.py}"
+SCRIPT="${1:-bin/infer_heatmap_celeba.py}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
