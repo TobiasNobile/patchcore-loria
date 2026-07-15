@@ -30,7 +30,7 @@ LOGGER = logging.getLogger(__name__)
 # CONFIG -- edit these, then run the script.
 # --------------------------------------------------------------------------- #
 # Directory written by bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
-BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
+BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
 
 # Single-image mode: index into the balanced CelebA TEST split (839 hat + 839
 # no-hat). Ignored when --n_per_class > 0.
