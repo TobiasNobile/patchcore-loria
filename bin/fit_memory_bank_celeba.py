@@ -41,7 +41,12 @@ GPU = [0]  # [] forces CPU. On a CUDA-less box this falls back to CPU anyway.
 # Number of no-hat TRAIN images the bank is built from. None = the whole split.
 # Cost scales with this: each image contributes ~784 patch features, and the
 # greedy coreset needs PERCENTAGE x that many sequential iterations.
+# Overridable by env var (FIT_TRAIN_SUBSET=10000) so one job can sweep several
+# sizes without editing this file; unset, it uses the value below.
 TRAIN_SUBSET = 2000
+_env_ts = os.environ.get("FIT_TRAIN_SUBSET")
+if _env_ts:
+    TRAIN_SUBSET = None if _env_ts.lower() in ("none", "all") else int(_env_ts)
 
 BACKBONE_NAME = "wideresnet50"
 LAYERS_TO_EXTRACT_FROM = ["layer2", "layer3"]

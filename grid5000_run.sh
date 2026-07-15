@@ -10,31 +10,58 @@
 #   ./grid5000_run.sh bin/infer_heatmap_celeba.py --image_index 900
 #   ./grid5000_run.sh bin/score_histogram_celeba.py --n_per_class 200
 #
-# Prérequis, une seule fois sur la frontale :
-#   ssh <login>@access.grid5000.fr
-#   ssh nancy
-#   cd ~/patchcore-inspection && uv sync
-#   uv pip uninstall faiss-cpu && uv pip install faiss-gpu-cu12   # sinon la
-#   recherche des plus proches voisins reste sur CPU malgré le GPU réservé.
+#   DETACH=true ./grid5000_run.sh bin/fit_memory_bank_celeba.py
+#       Soumet le job et rend la main IMMÉDIATEMENT (rien à garder ouvert : ni
+#       terminal, ni connexion, ni ordinateur allumé). Pour un run long/nocturne.
+#   ./grid5000_run.sh --fetch
+#       Ne lance rien : rapatrie les résultats d'un job détaché déjà terminé.
+#
+# Prérequis, une seule fois.
+#
+# 1) Dans ~/.ssh/config, la config officielle Grid'5000 (sinon la passerelle
+#    coupe les transferts un peu longs) :
+#
+#      Host g5k
+#        User <login>
+#        Hostname access.grid5000.fr
+#        ServerAliveInterval 30
+#      Host *.g5k
+#        User <login>
+#        ProxyCommand ssh g5k -W "$(basename %h .g5k):%p"
+#        ServerAliveInterval 30
+#
+#    Elle donne `ssh nancy.g5k`, ce que ce script utilise.
+#
+# 2) Sur la frontale : cd ~/patchcore-inspection && uv sync
+#
+# 3) Toujours sur la frontale, pré-télécharger CelebA (~22 Go) — le /home est
+#    partagé en NFS avec les nœuds, donc le job GPU n'aura plus qu'à calculer :
+#      uv run python -c "from datasets import load_dataset; load_dataset('flwrlabs/celeba')"
+#
+# Le fit n'a PAS besoin de faiss-gpu (le coreset tourne sur PyTorch/CUDA).
+# `uv pip install faiss-gpu-cu12` ne sert qu'à accélérer l'inférence, plus tard.
 #
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────
-# Login Grid'5000 (différent du login DCE). Surchargeable : G5K_USER=xxx ./grid5000_run.sh
-G5K_USER="${G5K_USER:-${USER}}"
-
-# La passerelle SSH publique de Grid'5000. La frontale du site n'est joignable
-# qu'à travers elle, d'où le ProxyJump ci-dessous.
-G5K_GATEWAY="access.grid5000.fr"
+# Le login Grid'5000 n'apparaît pas ici : il est dans ~/.ssh/config (cf. les
+# prérequis en tête de fichier), qui définit l'alias `<site>.g5k`.
 G5K_SITE="nancy"
 
-# À Nancy, la plupart des clusters GPU sont dans la queue `production`.
-OAR_QUEUE="production"
+# Queue des clusters accessibles au groupe 'orpailleur' à Nancy (cf. le message
+# d'accueil de la frontale). Ce n'est PAS `production` : Grid'5000 a renommé.
+OAR_QUEUE="abaca"
 OAR_GPU=1
-OAR_WALLTIME="02:00:00"
+OAR_WALLTIME="03:00:00"
 
-# Filtre optionnel sur les ressources, ex. "gpu_model = 'A100-PCIE-40GB'" pour
-# épingler un modèle de GPU, ou "cluster = 'grele'". Vide = n'importe lequel.
+# Filtre optionnel sur les ressources. Les clusters GPU de Nancy :
+#   grele     13 nœuds, 2x GTX 1080 Ti, 128 Go RAM   <- le plus dispo
+#   graffiti  12 nœuds, 4x RTX 2080 Ti, 128 Go RAM
+#   grue       5 nœuds, 4x Tesla T4,    128 Go RAM
+#   gruss      4 nœuds, 2x A40,         256 Go RAM
+#   gres       7 nœuds, 2x L40S,        512 Go RAM
+#   grat       1 nœud,  8x A100 40 Go,  512 Go RAM   <- très demandé
+# Vide = n'importe quel GPU (on attend moins). Sinon : "cluster = 'grele'".
 OAR_PROPERTIES=""
 
 REMOTE_DIR="patchcore-inspection"
@@ -45,6 +72,10 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 # défaut — l'inférence tourne là-bas de toute façon. Passe à true pour les
 # rapatrier et faire des heatmaps en local.
 FETCH_BANKS=false
+
+# true = soumet le job et rend la main tout de suite, sans suivre la sortie.
+# Le job survit à la fermeture du terminal : c'est OAR qui l'exécute, pas toi.
+DETACH="${DETACH:-false}"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste des
 # arguments est transmis tel quel au script Python.
@@ -59,14 +90,42 @@ SCRIPT_ARGS=("$@")
 # construisent et se consomment sur le serveur.
 EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results' --exclude 'mlruns.db' --exclude 'mlflow.db')
 
-SSH_FRONTEND=(ssh -J "${G5K_USER}@${G5K_GATEWAY}" "${G5K_USER}@${G5K_SITE}")
-RSYNC_SSH="ssh -J ${G5K_USER}@${G5K_GATEWAY}"
+# Alias défini par la config SSH ci-dessus : il traverse la passerelle tout seul.
+G5K_HOST="${G5K_SITE}.g5k"
+SSH_FRONTEND=(ssh "${G5K_HOST}")
+
+# --partial : un transfert coupé reprend là où il s'était arrêté au lieu de tout
+# refaire. La passerelle Grid'5000 coupe volontiers les connexions un peu longues.
+RSYNC_OPTS=(-avz --partial)
+
+# ─── Rapatriement (étape 3, ou seule action avec --fetch) ─────────────────
+fetch_results() {
+  echo "📥  Récupération des résultats..."
+  rsync "${RSYNC_OPTS[@]}" \
+    "${G5K_HOST}:${REMOTE_DIR}/results/" \
+    "${LOCAL_DIR}/results/" 2>/dev/null || echo "  (pas de dossier results/ à rapatrier)"
+
+  if [[ "${FETCH_BANKS}" == "true" ]]; then
+    echo "📥  Récupération des banques mémoire..."
+    rsync "${RSYNC_OPTS[@]}" \
+      "${G5K_HOST}:${REMOTE_DIR}/models/celeba/" \
+      "${LOCAL_DIR}/models/celeba/" 2>/dev/null || echo "  (pas de banque à rapatrier)"
+  fi
+}
+
+if [[ "${SCRIPT}" == "--fetch" ]]; then
+  echo "🔎  État des jobs OAR :"
+  "${SSH_FRONTEND[@]}" "oarstat -u" || true
+  fetch_results
+  echo "✅  Terminé."
+  exit 0
+fi
 
 # ─── 1. Sync : local → frontale ───────────────────────────────────────────
-echo "📤  Envoi du code vers ${G5K_SITE} (via ${G5K_GATEWAY})..."
-rsync -avz -e "${RSYNC_SSH}" "${EXCLUDES[@]}" \
+echo "📤  Envoi du code vers ${G5K_HOST}..."
+rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" \
   "${LOCAL_DIR}/" \
-  "${G5K_USER}@${G5K_SITE}:${REMOTE_DIR}/"
+  "${G5K_HOST}:${REMOTE_DIR}/"
 
 # ─── 2. Réservation d'un nœud GPU + exécution ─────────────────────────────
 QUOTED_ARGS=""
@@ -102,13 +161,26 @@ if [[ -z "\${JOB_ID}" ]]; then
   echo "❌  oarsub n'a pas rendu de job id (réservation refusée ?)." >&2
   exit 1
 fi
-echo "🎟️   Job OAR \${JOB_ID} soumis. En attente d'un nœud..."
+echo "🎟️   Job OAR \${JOB_ID} soumis."
+
+if [[ "${DETACH}" == "true" ]]; then
+  echo
+  echo "    Le job est maintenant entre les mains d'OAR : il démarrera dès qu'un"
+  echo "    nœud se libère, et tournera même si tu fermes ton terminal ou éteins"
+  echo "    ton ordinateur. Rien à laisser ouvert."
+  echo
+  echo "    Suivre :          ssh ${G5K_HOST} 'oarstat -u'"
+  echo "    Voir la sortie :  ssh ${G5K_HOST} 'tail -f ${REMOTE_DIR}/\${JOB_OUT}'"
+  echo "    Rapatrier :       ./grid5000_run.sh --fetch"
+  exit 0
+fi
 
 : > "\${JOB_OUT}"
 tail -f "\${JOB_OUT}" &
 TAIL_PID=\$!
 trap 'kill \${TAIL_PID} 2>/dev/null || true' EXIT
 
+echo "    En attente d'un nœud..."
 # Tant que le job est dans la file ou tourne, on attend. Les états OAR sont
 # Waiting / Launching / Running / Terminated / Error.
 while oarstat -s -j "\${JOB_ID}" | grep -qE 'Waiting|Launching|Running|toLaunch|Hold'; do
@@ -125,16 +197,7 @@ exit 0
 REMOTE_SCRIPT
 
 # ─── 3. Sync : frontale → local (rapatrie les outputs) ────────────────────
-echo "📥  Récupération des résultats..."
-rsync -avz -e "${RSYNC_SSH}" \
-  "${G5K_USER}@${G5K_SITE}:${REMOTE_DIR}/results/" \
-  "${LOCAL_DIR}/results/" 2>/dev/null || echo "  (pas de dossier results/ à rapatrier)"
-
-if [[ "${FETCH_BANKS}" == "true" ]]; then
-  echo "📥  Récupération des banques mémoire..."
-  rsync -avz -e "${RSYNC_SSH}" \
-    "${G5K_USER}@${G5K_SITE}:${REMOTE_DIR}/models/celeba/" \
-    "${LOCAL_DIR}/models/celeba/" 2>/dev/null || echo "  (pas de banque à rapatrier)"
-fi
+# En mode détaché on s'est déjà arrêté plus haut : le job n'a rien produit encore.
+fetch_results
 
 echo "✅  Terminé."

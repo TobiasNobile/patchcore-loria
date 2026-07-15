@@ -38,9 +38,15 @@ COLOR_ANOMALY = "#E8A33D"
 # CONFIG — édite ici, puis lance le script.
 # --------------------------------------------------------------------------- #
 # Dossier écrit par bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
+# BANK_DIR et OUTPUT_PATH sont surchargeables par env var (HIST_BANK_DIR /
+# HIST_OUTPUT_PATH) pour scorer plusieurs banques dans un même job sans éditer
+# ce fichier ; non définies, les valeurs ci-dessous s'appliquent.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 
 OUTPUT_PATH = "results/histograms/hist_celeba.png"
+
+BANK_DIR = os.environ.get("HIST_BANK_DIR", BANK_DIR)
+OUTPUT_PATH = os.environ.get("HIST_OUTPUT_PATH", OUTPUT_PATH)
 
 # Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. Plafonné au
 # nombre d'images disponibles par classe dans le test (la classe hat n'a qu'~839
