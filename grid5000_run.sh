@@ -52,7 +52,7 @@ G5K_SITE="nancy"
 # d'accueil de la frontale). Ce n'est PAS `production` : Grid'5000 a renommé.
 OAR_QUEUE="abaca"
 OAR_GPU=1
-OAR_WALLTIME="03:00:00"
+OAR_WALLTIME="${OAR_WALLTIME:-03:00:00}"
 
 # Filtre optionnel sur les ressources. Les clusters GPU de Nancy :
 #   grele     13 nœuds, 2x GTX 1080 Ti, 128 Go RAM   <- le plus dispo
@@ -79,11 +79,16 @@ LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
 # à 10% sur 2000 images, 64 Mo à 1%). Elles restent donc côté serveur par
 # défaut — l'inférence tourne là-bas de toute façon. Passe à true pour les
 # rapatrier et faire des heatmaps en local.
-FETCH_BANKS=false
+FETCH_BANKS="${FETCH_BANKS:-false}"
 
 # true = soumet le job et rend la main tout de suite, sans suivre la sortie.
 # Le job survit à la fermeture du terminal : c'est OAR qui l'exécute, pas toi.
 DETACH="${DETACH:-false}"
+
+# Variables d'env passées AU JOB (les variables locales ne le suivent pas). À
+# écrire avec des guillemets doubles, ex :
+#   REMOTE_ENV='SIZES="1000 2000" PCTS="0.1" N_PER_CLASS=300'
+REMOTE_ENV="${REMOTE_ENV:-}"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste des
 # arguments est transmis tel quel au script Python.
@@ -96,7 +101,10 @@ SCRIPT_ARGS=("$@")
 # Mêmes exclusions que remote_run.sh : gros fichiers, ou spécifiques à la
 # machine locale. `models` est exclu dans les deux sens : les banques se
 # construisent et se consomment sur le serveur.
-EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results' --exclude 'mlruns.db' --exclude 'mlflow.db')
+EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
+          --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
+          --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
+          --exclude '.mlflow_import' --exclude '__pycache__' --exclude '.pytest_cache')
 
 # Alias défini par la config SSH ci-dessus : il traverse la passerelle tout seul.
 G5K_HOST="${G5K_SITE}.g5k"
@@ -163,6 +171,13 @@ if [[ -n "${OAR_PROPERTIES}" ]]; then
   PROPERTY_FLAG="-p \"${OAR_PROPERTIES}\""
 fi
 
+# Un .sh (ex: sweep_histograms.sh) se lance avec bash, le reste avec python.
+if [[ "${SCRIPT}" == *.sh ]]; then
+  RUNNER="bash"
+else
+  RUNNER="python"
+fi
+
 echo "Réservation d'un nœud GPU (queue ${OAR_QUEUE}, gpu=${OAR_GPU}, walltime=${OAR_WALLTIME})..."
 echo "    puis exécution de ${SCRIPT}${QUOTED_ARGS}"
 
@@ -176,13 +191,35 @@ set -euo pipefail
 cd "${REMOTE_DIR}"
 
 JOB_OUT="oar_job.out"
-JOB_ID=\$(oarsub -q "${OAR_QUEUE}" \
-  -l "gpu=${OAR_GPU},walltime=${OAR_WALLTIME}" ${PROPERTY_FLAG} \
-  --stdout="\${JOB_OUT}" --stderr="\${JOB_OUT}" \
-  "bash -c 'cd ~/${REMOTE_DIR} && source .venv/bin/activate && export PATCHCORE_ORIGIN=g5k && python ${SCRIPT}${QUOTED_ARGS}'" \
-  | sed -n 's/^OAR_JOB_ID=//p')
+
+# Le job est écrit dans un script à part plutôt que passé en ligne à oarsub :
+# une valeur de REMOTE_ENV contenant des guillemets (SIZES="1000 2000") casserait
+# l'imbrication des quotes d'un oarsub "bash -c '...'" et découperait l'argument.
+LAUNCH=".oar_launch.sh"
+cat > "\${LAUNCH}" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -euo pipefail
+cd ~/${REMOTE_DIR}
+source .venv/bin/activate
+export PATCHCORE_ORIGIN=g5k
+${REMOTE_ENV} ${RUNNER} ${SCRIPT}${QUOTED_ARGS}
+LAUNCHER
+chmod +x "\${LAUNCH}"
+
+# On capture la sortie d'oarsub : sous 'set -e' + pipefail, un échec de
+# réservation avortait le script sans afficher la moindre raison.
+if ! OARSUB_OUT=\$(oarsub -q "${OAR_QUEUE}" \
+      -l "gpu=${OAR_GPU},walltime=${OAR_WALLTIME}" ${PROPERTY_FLAG} \
+      --stdout="\${JOB_OUT}" --stderr="\${JOB_OUT}" \
+      "./\${LAUNCH}" 2>&1); then
+  echo "\${OARSUB_OUT}" >&2
+  echo "oarsub a échoué." >&2
+  exit 1
+fi
+JOB_ID=\$(printf '%s\n' "\${OARSUB_OUT}" | sed -n 's/^OAR_JOB_ID=//p')
 
 if [[ -z "\${JOB_ID}" ]]; then
+  echo "\${OARSUB_OUT}" >&2
   echo "oarsub n'a pas rendu de job id (réservation refusée ?)." >&2
   exit 1
 fi

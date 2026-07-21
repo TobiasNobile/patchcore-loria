@@ -67,7 +67,9 @@ NUM_WORKERS = 8
 FAISS_ON_GPU = False
 FAISS_NUM_WORKERS = 4
 
-MODELS_DIR = "models/celeba"
+# Surchargeable par FIT_MODELS_DIR : sur Grid'5000 on pointe vers le disque local
+# du nœud, pour ne pas saturer le quota /home avec des banques transitoires.
+MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/celeba")
 # --------------------------------------------------------------------------- #
 
 

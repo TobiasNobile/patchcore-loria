@@ -38,15 +38,22 @@ PYTHON="${PYTHON:-python}"
 BACKBONE="wideresnet50"
 SAMPLER="approx_greedy_coreset"
 SEED=0
-MODELS_DIR="models/celeba"
-OUT_DIR="results/histograms/sweep"
+# Où écrire les banques. Sur Grid'5000, pointer vers le disque local du nœud
+# (MODELS_DIR=/tmp/patchcore-banks) : le quota /home ne tient pas les 40 Go.
+MODELS_DIR="${MODELS_DIR:-models/celeba}"
 
-SIZES=(1000 2000 5000 10000 20000 50000)
-NNS=(3 1)
-PCTS=(0.1 0.05)
+# false = supprime chaque banque une fois scorée, ce qui borne le pic disque à
+# une seule banque. Défaut true pour ne jamais effacer des banques persistantes.
+KEEP_BANKS="${KEEP_BANKS:-true}"
+OUT_DIR="${OUT_DIR:-results/histograms/sweep}"
+
+# Surchargeables par env var pour un test rapide, ex : SIZES="1000 2000".
+read -ra SIZES <<< "${SIZES:-1000 2000 5000 10000 20000 50000}"
+read -ra NNS   <<< "${NNS:-3 1}"
+read -ra PCTS  <<< "${PCTS:-0.1 0.05}"
 N_PER_CLASS="${N_PER_CLASS:-1000}"
 
-mkdir -p "${OUT_DIR}"
+mkdir -p "${OUT_DIR}" "${MODELS_DIR}"
 
 bank_tag() {  # $1 = pct, $2 = train_subset
   # %g reproduit le formatage Python "{:g}" : 0.1 -> "0.1", 0.05 -> "0.05".
@@ -66,7 +73,7 @@ for pct in "${PCTS[@]}"; do
       echo "Banque déjà présente, fit sauté : ${bank_dir}"
     else
       echo "Fit banque ts=${size} coreset=${pct} -> ${bank_dir}"
-      FIT_TRAIN_SUBSET="${size}" FIT_CORESET_PCT="${pct}" \
+      FIT_TRAIN_SUBSET="${size}" FIT_CORESET_PCT="${pct}" FIT_MODELS_DIR="${MODELS_DIR}" \
         "${PYTHON}" bin/fit_memory_bank_celeba.py
     fi
 
@@ -77,6 +84,11 @@ for pct in "${PCTS[@]}"; do
       HIST_BANK_DIR="${bank_dir}" HIST_OUTPUT_PATH="${out}" HIST_NUM_NN="${nn}" \
         "${PYTHON}" bin/score_histogram_celeba.py --n_per_class "${N_PER_CLASS}"
     done
+
+    if [[ "${KEEP_BANKS}" != "true" ]]; then
+      echo "  Banque scorée, suppression (KEEP_BANKS=false) : ${bank_dir}"
+      rm -rf "${bank_dir}"
+    fi
   done
 done
 

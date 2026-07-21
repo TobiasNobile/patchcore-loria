@@ -38,7 +38,10 @@ SCRIPT_ARGS=("$@")
 # ou spécifiques à la machine locale). mlruns.db est exclu car il contient des
 # artifact_location absolus propres à cette machine (écraser la base distante
 # avec ferait pointer MLflow vers des chemins locaux inexistants sur le serveur).
-EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results' --exclude 'mlruns.db' --exclude 'mlflow.db')
+EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
+          --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
+          --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
+          --exclude '.mlflow_import' --exclude '__pycache__' --exclude '.pytest_cache')
 
 # On ne garde PLUS de base MLflow parallèle. La base distante et ses artefacts
 # sont rapatriés dans un dossier TEMPORAIRE, puis leurs runs sont IMPORTÉS dans
