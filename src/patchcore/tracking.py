@@ -1,5 +1,6 @@
 import logging
 import os
+import socket
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +9,49 @@ import mlflow
 LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_TRACKING_URI = "sqlite:///mlruns.db"
+
+
+def _environment_tags() -> Dict[str, str]:
+    """Tags identifiant OÙ un run a été produit, posés à sa création.
+
+    C'est ce qui rend les runs "séparés et structurés" dans la base unique :
+    quelle que soit la machine, chaque run porte son origine et de quoi le
+    retrouver (hostname, id de job de l'ordonnanceur). On lit `PATCHCORE_ORIGIN`
+    en priorité (posé par remote_run.sh / grid5000_run.sh), sinon on déduit :
+    OAR -> Grid'5000, SLURM -> Metz, à défaut local.
+
+        origin   local | g5k | metz | <valeur de PATCHCORE_ORIGIN>
+        host     nom de machine (hostname)
+        job_id   OAR_JOB_ID ou SLURM_JOB_ID s'il y en a un
+        cluster  cluster Grid'5000 (déduit du hostname) ou partition SLURM
+    """
+    host = socket.gethostname()
+    oar_job = os.environ.get("OAR_JOB_ID")
+    slurm_job = os.environ.get("SLURM_JOB_ID")
+
+    origin = os.environ.get("PATCHCORE_ORIGIN")
+    if not origin:
+        origin = "g5k" if oar_job else "metz" if slurm_job else "local"
+
+    tags = {"origin": origin, "host": host}
+    job_id = oar_job or slurm_job
+    if job_id:
+        tags["job_id"] = job_id
+
+    if origin == "g5k":
+        # Un nœud Grid'5000 s'appelle p.ex. "grele-3.nancy.grid5000.fr" : le
+        # cluster est le préfixe avant le premier tiret.
+        cluster = host.split(".")[0].split("-")[0]
+        if cluster:
+            tags["cluster"] = cluster
+    else:
+        cluster = os.environ.get("SLURM_CLUSTER_NAME") or os.environ.get(
+            "SLURM_JOB_PARTITION"
+        )
+        if cluster:
+            tags["cluster"] = cluster
+
+    return tags
 
 
 def make_run_name(
@@ -92,6 +136,7 @@ def patchcore_run(
     mlflow.set_experiment(experiment)
 
     with mlflow.start_run(run_name=run_name) as active_run:
+        mlflow.set_tags(_environment_tags())
         mlflow.log_params(_flatten_params(params))
         LOGGER.info(
             "MLflow run started: %s (id=%s)", run_name, active_run.info.run_id

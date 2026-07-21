@@ -67,6 +67,14 @@ OAR_PROPERTIES=""
 REMOTE_DIR="patchcore-inspection"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# MLflow : pas de base parallèle. On rapatrie la base + artefacts du serveur dans
+# un dossier temporaire, puis on IMPORTE les runs dans la base locale unique
+# (mlruns.db) via tools/mlflow_import.py — origine "g5k". Idempotent.
+IMPORT_TMP=".mlflow_import/g5k"
+IMPORT_ORIGIN="g5k"
+LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
+[[ -x "${LOCAL_PYTHON}" ]] || LOCAL_PYTHON="python"
+
 # Les banques mémoire pèsent lourd (~4 Ko par vecteur : 640 Mo pour une banque
 # à 10% sur 2000 images, 64 Mo à 1%). Elles restent donc côté serveur par
 # défaut — l'inférence tourne là-bas de toute façon. Passe à true pour les
@@ -104,6 +112,23 @@ fetch_results() {
   rsync "${RSYNC_OPTS[@]}" \
     "${G5K_HOST}:${REMOTE_DIR}/results/" \
     "${LOCAL_DIR}/results/" 2>/dev/null || echo "  (pas de dossier results/ à rapatrier)"
+
+  # MLflow : rapatriement temporaire puis fusion dans la base locale unique.
+  echo "📥  Récupération de la base MLflow (temporaire ${IMPORT_TMP})..."
+  mkdir -p "${LOCAL_DIR}/${IMPORT_TMP}/mlruns"
+  rsync "${RSYNC_OPTS[@]}" \
+    "${G5K_HOST}:${REMOTE_DIR}/mlruns.db" \
+    "${LOCAL_DIR}/${IMPORT_TMP}/mlruns.db" 2>/dev/null || echo "  (pas de mlruns.db distante)"
+  rsync "${RSYNC_OPTS[@]}" \
+    "${G5K_HOST}:${REMOTE_DIR}/mlruns/" \
+    "${LOCAL_DIR}/${IMPORT_TMP}/mlruns/" 2>/dev/null || echo "  (pas d'artefacts mlruns/ distants)"
+  if [[ -f "${LOCAL_DIR}/${IMPORT_TMP}/mlruns.db" ]]; then
+    echo "🔀  Fusion des runs Grid'5000 dans la base locale unique (mlruns.db)..."
+    ( cd "${LOCAL_DIR}" && "${LOCAL_PYTHON}" tools/mlflow_import.py \
+        --source-db "${IMPORT_TMP}/mlruns.db" \
+        --source-artifacts "${IMPORT_TMP}/mlruns" \
+        --origin "${IMPORT_ORIGIN}" --route-by-runname )
+  fi
 
   if [[ "${FETCH_BANKS}" == "true" ]]; then
     echo "📥  Récupération des banques mémoire..."
@@ -154,7 +179,7 @@ JOB_OUT="oar_job.out"
 JOB_ID=\$(oarsub -q "${OAR_QUEUE}" \
   -l "gpu=${OAR_GPU},walltime=${OAR_WALLTIME}" ${PROPERTY_FLAG} \
   --stdout="\${JOB_OUT}" --stderr="\${JOB_OUT}" \
-  "bash -c 'cd ~/${REMOTE_DIR} && source .venv/bin/activate && python ${SCRIPT}${QUOTED_ARGS}'" \
+  "bash -c 'cd ~/${REMOTE_DIR} && source .venv/bin/activate && export PATCHCORE_ORIGIN=g5k && python ${SCRIPT}${QUOTED_ARGS}'" \
   | sed -n 's/^OAR_JOB_ID=//p')
 
 if [[ -z "\${JOB_ID}" ]]; then

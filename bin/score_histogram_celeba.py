@@ -61,8 +61,11 @@ NUM_WORKERS = 8
 FAISS_ON_GPU = False
 FAISS_NUM_WORKERS = 4
 
-LOG_PROJECT = "CelebA_Results"
-LOG_GROUP = "score_histogram"
+# Une expérience MLflow PAR TÂCHE (pas un fourre-tout "CelebA_Results") : les
+# histogrammes vivent ensemble, séparés des heatmaps et des benchmarks. Le
+# run_name encode la config (ts / coreset / nn) et l'origine (local/g5k/metz)
+# est posée en tag automatiquement par patchcore.tracking.
+LOG_PROJECT = "celeba-histograms"
 # --------------------------------------------------------------------------- #
 
 
@@ -329,9 +332,12 @@ def main(n_per_class):
         json.dump({**mlflow_params, **metrics}, fh, indent=2)
     LOGGER.info("Saved metrics to %s", sidecar)
 
+    run_name = "hist-ts{}-p{:g}-nn{}".format(
+        fit_config["train_subset"], fit_config["coreset_pct"], num_nn_used
+    )
     try:
         with patchcore.tracking.patchcore_run(
-            experiment=LOG_PROJECT, run_name=LOG_GROUP, params=mlflow_params
+            experiment=LOG_PROJECT, run_name=run_name, params=mlflow_params
         ) as mlflow_run:
             mlflow_run.log_metrics(metrics)
             mlflow_run.log_artifacts(OUTPUT_PATH)
