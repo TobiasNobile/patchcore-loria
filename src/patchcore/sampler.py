@@ -52,15 +52,29 @@ class GreedyCoresetSampler(BaseSampler):
         self.device = device
         self.dimension_to_project_features_to = dimension_to_project_features_to
 
-    def _reduce_features(self, features):
+    def _reduce_features(self, features, chunk_size=1 << 20):
         if features.shape[1] == self.dimension_to_project_features_to:
             return features
         mapper = torch.nn.Linear(
             features.shape[1], self.dimension_to_project_features_to, bias=False
         )
         _ = mapper.to(self.device)
-        features = features.to(self.device)
-        return mapper(features)
+        # Projection par morceaux. Transférer le nuage complet non projeté sur le
+        # device coûterait N x 1024 x 4 octets (150 Go pour 50 000 images, soit
+        # plus que n'importe quel GPU), alors que seul le résultat en
+        # dimension_to_project_features_to est utilisé ensuite : on ne transfère
+        # donc qu'un bloc à la fois. Résultat numériquement identique, le mapper
+        # étant appliqué ligne à ligne.
+        projected = torch.empty(
+            (features.shape[0], self.dimension_to_project_features_to),
+            device=self.device,
+            dtype=mapper.weight.dtype,
+        )
+        with torch.no_grad():
+            for start in range(0, features.shape[0], chunk_size):
+                block = features[start : start + chunk_size].to(self.device)
+                projected[start : start + chunk_size] = mapper(block)
+        return projected
 
     def run(
         self, features: Union[torch.Tensor, np.ndarray]

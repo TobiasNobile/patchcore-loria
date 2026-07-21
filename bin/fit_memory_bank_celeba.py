@@ -64,8 +64,8 @@ IMAGESIZE = 224
 BATCH_SIZE = 8
 NUM_WORKERS = 8
 
-FAISS_ON_GPU = False
-FAISS_NUM_WORKERS = 4
+FAISS_ON_GPU = os.environ.get("FIT_FAISS_GPU", "").lower() in ("1", "true", "yes")
+FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "4"))
 
 # Surchargeable par FIT_MODELS_DIR : sur Grid'5000 on pointe vers le disque local
 # du nœud, pour ne pas saturer le quota /home avec des banques transitoires.

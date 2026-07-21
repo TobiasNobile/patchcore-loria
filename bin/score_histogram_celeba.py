@@ -58,8 +58,12 @@ BINS = 50
 TEST_BATCH_SIZE = 8
 NUM_WORKERS = 8
 
-FAISS_ON_GPU = False
-FAISS_NUM_WORKERS = 4
+# La recherche FAISS domine le temps de scoring et croît avec la taille de banque.
+# Sur CPU elle est ~14 s par batch de 8 pour 78k vecteurs, ce qui rend un balayage
+# complet impraticable -> HIST_FAISS_GPU=1 la bascule sur GPU. Attention : l'index
+# est alors entièrement en mémoire GPU (4 Ko par vecteur).
+FAISS_ON_GPU = os.environ.get("HIST_FAISS_GPU", "").lower() in ("1", "true", "yes")
+FAISS_NUM_WORKERS = int(os.environ.get("HIST_FAISS_THREADS", "4"))
 
 # Une expérience MLflow par tâche : les histogrammes séparés des heatmaps et des
 # benchmarks. run_name encode la config, l'origine est taguée par patchcore.tracking.

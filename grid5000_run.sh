@@ -54,6 +54,12 @@ OAR_QUEUE="abaca"
 OAR_GPU=1
 OAR_WALLTIME="${OAR_WALLTIME:-03:00:00}"
 
+# Ressources demandées. Par défaut un seul GPU, ce qui n'octroie qu'une fraction
+# de la RAM du nœud sur les clusters multi-GPU. Passer OAR_RESOURCES="host=1"
+# réserve le nœud entier (toute la RAM), nécessaire quand le nuage de features
+# est gros : un fit à ts=20000 demande ~60 Go rien que pour les features.
+OAR_RESOURCES="${OAR_RESOURCES:-gpu=${OAR_GPU}}"
+
 # Le PyTorch installé ne supporte que les compute capabilities sm_75 et plus.
 # Sur un GPU plus ancien la première convolution meurt avec un message trompeur,
 # "RuntimeError: GET was unable to find an engine to execute this computation".
@@ -216,7 +222,7 @@ chmod +x "\${LAUNCH}"
 # On capture la sortie d'oarsub : sous 'set -e' + pipefail, un échec de
 # réservation avortait le script sans afficher la moindre raison.
 if ! OARSUB_OUT=\$(oarsub -q "${OAR_QUEUE}" \
-      -l "gpu=${OAR_GPU},walltime=${OAR_WALLTIME}" ${PROPERTY_FLAG} \
+      -l "${OAR_RESOURCES},walltime=${OAR_WALLTIME}" ${PROPERTY_FLAG} \
       --stdout="\${JOB_OUT}" --stderr="\${JOB_OUT}" \
       "./\${LAUNCH}" 2>&1); then
   echo "\${OARSUB_OUT}" >&2

@@ -53,6 +53,15 @@ read -ra NNS   <<< "${NNS:-3 1}"
 read -ra PCTS  <<< "${PCTS:-0.1 0.05}"
 N_PER_CLASS="${N_PER_CLASS:-1000}"
 
+# Pourcentages propres à une taille, ex : PCTS_50000="0.02 0.01". Le coreset est
+# quadratique en nombre de features (chaque itération balaie tout le nuage), donc
+# les grandes tailles sont hors de portée aux pourcentages habituels : ts=50000 à
+# 10 % demanderait ~46 h de fit, contre ~9 h à 2 %.
+pcts_for() {  # $1 = train_subset
+  local var="PCTS_$1"
+  if [[ -n "${!var:-}" ]]; then printf '%s' "${!var}"; else printf '%s' "${PCTS[*]}"; fi
+}
+
 mkdir -p "${OUT_DIR}" "${MODELS_DIR}"
 
 bank_tag() {  # $1 = pct, $2 = train_subset
@@ -60,11 +69,17 @@ bank_tag() {  # $1 = pct, $2 = train_subset
   printf '%s_%s_p%g_ts%s_s%s' "${BACKBONE}" "${SAMPLER}" "$1" "$2" "${SEED}"
 }
 
-echo "Balayage : ${#SIZES[@]} tailles x ${#NNS[@]} voisins x ${#PCTS[@]} pourcentages"
-echo "  = $(( ${#SIZES[@]} * ${#NNS[@]} * ${#PCTS[@]} )) histogrammes, $(( ${#SIZES[@]} * ${#PCTS[@]} )) banques à (re)construire au plus."
+n_banks=0
+for size in "${SIZES[@]}"; do
+  read -ra _pcts <<< "$(pcts_for "${size}")"
+  n_banks=$(( n_banks + ${#_pcts[@]} ))
+  echo "  ts=${size} : coreset ${_pcts[*]}"
+done
+echo "Balayage : ${n_banks} banques x ${#NNS[@]} voisins = $(( n_banks * ${#NNS[@]} )) histogrammes."
 
-for pct in "${PCTS[@]}"; do
-  for size in "${SIZES[@]}"; do
+for size in "${SIZES[@]}"; do
+  read -ra size_pcts <<< "$(pcts_for "${size}")"
+  for pct in "${size_pcts[@]}"; do
     tag="$(bank_tag "${pct}" "${size}")"
     bank_dir="${MODELS_DIR}/${tag}"
 

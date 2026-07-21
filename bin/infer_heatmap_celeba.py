@@ -47,8 +47,8 @@ HEATMAP_VMAX = 10
 HEATMAP_ALPHA = 0.5
 
 BATCH_SIZE = 8
-FAISS_ON_GPU = False
-FAISS_NUM_WORKERS = 4
+FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
+FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "4"))
 # --------------------------------------------------------------------------- #
 
 
