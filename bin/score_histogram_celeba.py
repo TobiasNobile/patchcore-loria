@@ -61,29 +61,20 @@ NUM_WORKERS = 8
 FAISS_ON_GPU = False
 FAISS_NUM_WORKERS = 4
 
-# Une expérience MLflow PAR TÂCHE (pas un fourre-tout "CelebA_Results") : les
-# histogrammes vivent ensemble, séparés des heatmaps et des benchmarks. Le
-# run_name encode la config (ts / coreset / nn) et l'origine (local/g5k/metz)
-# est posée en tag automatiquement par patchcore.tracking.
+# Une expérience MLflow par tâche : les histogrammes séparés des heatmaps et des
+# benchmarks. run_name encode la config, l'origine est taguée par patchcore.tracking.
 LOG_PROJECT = "celeba-histograms"
 # --------------------------------------------------------------------------- #
 
 
 def normalized_wasserstein(scores_a, scores_b):
-    """Distance de Wasserstein-1 entre deux échantillons 1D, normalisée par
-    l'écart-type regroupé.
+    """Wasserstein-1 entre deux échantillons 1D, normalisée par l'écart-type
+    regroupé : W1 / sqrt((var_a + var_b) / 2).
 
-    W1 seule a les unités du score d'anomalie (échelle arbitraire, qui varie
-    d'une config d'hyperparamètres à l'autre) -> on la divise par sigma_pooled
-    pour obtenir une grandeur SANS dimension, comparable entre configs. C'est
-    une taille d'effet, qui généralise le d de Cohen (auquel elle est égale si
-    les deux distributions sont gaussiennes de même variance).
-
-        W1           = aire entre les CDF empiriques (scipy.wasserstein_distance)
-        sigma_pooled = sqrt((var_a + var_b) / 2)          [écarts-types échantillon]
-        W1_normalise = W1 / sigma_pooled
-
-    Fonction pure : renvoie {w1, w1_normalized, pooled_std}.
+    W1 seule a les unités du score (échelle arbitraire selon la config) ; la
+    normaliser donne une taille d'effet sans dimension, comparable entre configs
+    (= d de Cohen si les deux distributions sont gaussiennes de même variance).
+    Renvoie {w1, w1_normalized, pooled_std}.
     """
     scores_a = np.asarray(scores_a, dtype=float)
     scores_b = np.asarray(scores_b, dtype=float)
@@ -98,25 +89,13 @@ def normalized_wasserstein(scores_a, scores_b):
 
 
 def histogram_jaccard(scores_a, scores_b, edges):
-    """Indice de Jaccard du recouvrement des deux distributions, sur les MÊMES
-    bins que l'histogramme tracé.
+    """Indice de Jaccard du recouvrement des deux distributions, sur les mêmes
+    bins que l'histogramme tracé : J = somme min(n_i, a_i) / somme max(n_i, a_i).
 
-    Sur chaque bin i, avec les effectifs n_i (no-hat) et a_i (hat) :
-
-        intersection = somme_i min(n_i, a_i)   masse commune aux deux distributions
-                                               (la zone où elles se recouvrent)
-        union        = somme_i max(n_i, a_i)   = N_no-hat + N_hat - intersection
-        jaccard      = intersection / union
-
-    L'intersection compte, bin par bin, les images de la classe minoritaire : ce
-    sont exactement celles qu'un classifieur par seuil (vote majoritaire par bin)
-    se tromperait forcément — les Faux Positifs + Faux Négatifs incompressibles.
-    D'où la lecture "proportion de FP/FN rapportée à la taille de l'union".
-
-        J = 0  distributions disjointes  -> séparables sans erreur
-        J = 1  distributions identiques  -> recouvrement total
-
-    Fonction pure : renvoie {jaccard, intersection, union}.
+    L'intersection (somme des min) compte bin par bin la classe minoritaire : les
+    images qu'un classifieur par seuil se tromperait forcément (FP + FN
+    incompressibles), d'où "FP/FN rapportés à l'union". J=0 séparables, J=1
+    identiques. Renvoie {jaccard, intersection, union}.
     """
     n = np.histogram(np.asarray(scores_a, dtype=float), bins=edges)[0]
     a = np.histogram(np.asarray(scores_b, dtype=float), bins=edges)[0]
@@ -130,19 +109,9 @@ def histogram_jaccard(scores_a, scores_b, edges):
 
 
 def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[float, bool]:
-    """
-    Runs a scipy unilateral t-test between distributions of scores of good labels (ex: no-hat) and scores of anomaly labels (ex: hat).
-    Tests if mean of anomaly scores is statistically greater than mean of good score.
-    Confidence level : 95%
-    equal_var=False : test de Welch (ne suppose pas des variances égales).
-
-    Args:
-        - scores_good: global scores of good images (no anomaly)
-        - scores_anomaly : global scores of anomaly images
-
-    Returns: tuple
-        - p-value: computed from t-test
-        - True if mean of anomaly scores statistically greater (p-value < 0.05), else False
+    """Test t unilatéral de Welch entre scores no-hat et hat : la moyenne des
+    scores d'anomalie est-elle significativement plus haute ? Seuil 5%.
+    Renvoie (p_value, True si p < 0.05).
     """
 
     res = ttest_ind(scores_good, scores_anomaly, alternative="less", equal_var=False)
@@ -173,11 +142,9 @@ def main(n_per_class):
         BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
     )
 
-    # Nombre de plus proches voisins utilisé pour le score : c'est un paramètre
-    # de SCORING (pas de construction du coreset -> la banque est identique quel
-    # que soit num_nn), donc surchargeable ici sans re-fitter, via HIST_NUM_NN.
-    # imagelevel_nn a capturé l'ancien k dans sa closure à la construction du
-    # scorer : régler l'attribut ne suffit pas, on rebinde la lambda.
+    # Nombre de plus proches voisins : paramètre de SCORING (pas de construction du
+    # coreset, la banque est identique), donc surchargeable sans re-fitter via
+    # HIST_NUM_NN. imagelevel_nn a capturé l'ancien k dans sa closure -> on rebinde.
     num_nn_used = int(fit_config.get("anomaly_scorer_num_nn", 1))
     _env_num_nn = os.environ.get("HIST_NUM_NN")
     if _env_num_nn:

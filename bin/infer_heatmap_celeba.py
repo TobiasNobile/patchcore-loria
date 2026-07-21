@@ -1,14 +1,11 @@
-"""Overlay the PatchCore anomaly heatmap on CelebA test images.
+"""Superpose la heatmap d'anomalie PatchCore sur des images test CelebA.
 
-Loads a memory bank built by bin/fit_memory_bank_celeba.py -- no fitting, no
-coreset, so this is the fast half of PatchCore. Preprocessing (resize /
-imagesize) and the split seed are read back from the bank's fit_config.json
-rather than restated here: a query embedded differently from the bank it is
-searched against would give meaningless distances.
+Charge une banque construite par bin/fit_memory_bank_celeba.py — pas de fit ni de
+coreset, c'est la moitié rapide de PatchCore. Le prétraitement et le seed sont
+relus du fit_config.json de la banque.
 
-    python bin/fit_memory_bank_celeba.py                    # once, offline
-    python bin/infer_heatmap_celeba.py                      # default single image
-    python bin/infer_heatmap_celeba.py --image_index 900    # any other single one
+    python bin/infer_heatmap_celeba.py                      # une image (défaut)
+    python bin/infer_heatmap_celeba.py --image_index 900    # une autre image
     python bin/infer_heatmap_celeba.py --n_per_class 30     # 30 hat + 30 no-hat
 """
 import logging
@@ -27,26 +24,24 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 LOGGER = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# CONFIG -- edit these, then run the script.
+# CONFIG — à éditer avant de lancer.
 # --------------------------------------------------------------------------- #
-# Directory written by bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
+# Dossier écrit par bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
 
-# Single-image mode: index into the balanced CelebA TEST split (839 hat + 839
-# no-hat). Ignored when --n_per_class > 0.
+# Mode image seule : index dans le split TEST équilibré (839 hat + 839 no-hat).
+# Ignoré si --n_per_class > 0.
 IMAGE_INDEX_DEFAULT = 0
 
-# Overlays land here. In single-image mode the {idx} placeholder is filled in.
-# In --n_per_class mode a per-bank subfolder is created next to it and each file
-# is named <hat|good>_idx<N>.png.
+# Sorties ici. En mode image seule, {idx} est remplacé. En mode --n_per_class,
+# un sous-dossier par banque est créé, fichiers <hat|good>_idx<N>.png.
 OUTPUT_PATH = "results/heatmaps/overlay_idx{idx}.png"
 
-GPU = [0]  # [] forces CPU. Falls back to CPU on a CUDA-less box anyway.
+GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Colour scale of the overlay. None = autoscale to each image's own min/max,
-# which always shows structure but is not comparable across images. Fix both
-# (e.g. 0 and 10) to compare heatmaps on a shared scale -- what you want for a
-# batch of images meant to be looked at side by side.
+# Échelle de couleur. None = autoscale par image (montre la structure mais
+# incomparable entre images). Fixer les deux (p.ex. 0 et 10) pour comparer sur
+# une échelle commune, utile pour un lot d'images regardées côte à côte.
 HEATMAP_VMIN = 0
 HEATMAP_VMAX = 10
 HEATMAP_ALPHA = 0.5
@@ -58,13 +53,13 @@ FAISS_NUM_WORKERS = 4
 
 
 def _denormalize(sample_image, mean, std):
-    """Undo the ImageNet normalization to get a uint8 HxWx3 image for display."""
+    """Annule la normalisation ImageNet -> image uint8 HxWx3 pour l'affichage."""
     image = np.clip((sample_image.numpy() * std + mean) * 255, 0, 255).astype(np.uint8)
     return image.transpose(1, 2, 0)
 
 
 def _save_overlay(image, heatmap, score, anomaly, ms, out_path):
-    """Write one image + heatmap overlay to out_path."""
+    """Écrit une image + sa heatmap superposée dans out_path."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     plt.imshow(image)
     plt.imshow(
@@ -84,15 +79,15 @@ def _save_overlay(image, heatmap, score, anomaly, ms, out_path):
     type=int,
     default=IMAGE_INDEX_DEFAULT,
     show_default=True,
-    help="Single-image mode: index into the balanced CelebA TEST split.",
+    help="Mode image seule : index dans le split TEST équilibré de CelebA.",
 )
 @click.option(
     "--n_per_class",
     type=int,
     default=0,
     show_default=True,
-    help="If >0, ignore --image_index: draw n hat and n no-hat TEST images at "
-    "random (equal counts, capped at ~839 available per class) and overlay each.",
+    help="Si >0, ignore --image_index : tire n images hat et n no-hat au hasard "
+    "(effectifs égaux, plafonné à ~839 par classe) et superpose chacune.",
 )
 def main(image_index, n_per_class):
     device = patchcore.utils.set_torch_device(GPU)
@@ -112,8 +107,8 @@ def main(image_index, n_per_class):
     mean = np.array(test_dataset.transform_mean).reshape(-1, 1, 1)
     std = np.array(test_dataset.transform_std).reshape(-1, 1, 1)
 
-    # Pick which test images to overlay. Labels are known without inference, so
-    # the hat / no-hat draw happens up front (same approach as the histogram).
+    # Choix des images à superposer. Les labels sont connus sans inférence, donc
+    # le tirage hat/no-hat se fait en amont (comme pour l'histogramme).
     if n_per_class > 0:
         labels = np.asarray(test_dataset.labels, dtype=int)
         normal_idx = np.where(labels == 0)[0]

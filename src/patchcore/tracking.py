@@ -12,18 +12,11 @@ _DEFAULT_TRACKING_URI = "sqlite:///mlruns.db"
 
 
 def _environment_tags() -> Dict[str, str]:
-    """Tags identifiant OÙ un run a été produit, posés à sa création.
+    """Tags identifiant où un run a été produit (origin/host/job_id/cluster),
+    posés à sa création pour retrouver les runs dans la base unique.
 
-    C'est ce qui rend les runs "séparés et structurés" dans la base unique :
-    quelle que soit la machine, chaque run porte son origine et de quoi le
-    retrouver (hostname, id de job de l'ordonnanceur). On lit `PATCHCORE_ORIGIN`
-    en priorité (posé par remote_run.sh / grid5000_run.sh), sinon on déduit :
-    OAR -> Grid'5000, SLURM -> Metz, à défaut local.
-
-        origin   local | g5k | metz | <valeur de PATCHCORE_ORIGIN>
-        host     nom de machine (hostname)
-        job_id   OAR_JOB_ID ou SLURM_JOB_ID s'il y en a un
-        cluster  cluster Grid'5000 (déduit du hostname) ou partition SLURM
+    origin vient de PATCHCORE_ORIGIN (posé par les scripts de run), sinon déduit :
+    OAR -> g5k, SLURM -> metz, à défaut local.
     """
     host = socket.gethostname()
     oar_job = os.environ.get("OAR_JOB_ID")
@@ -39,8 +32,7 @@ def _environment_tags() -> Dict[str, str]:
         tags["job_id"] = job_id
 
     if origin == "g5k":
-        # Un nœud Grid'5000 s'appelle p.ex. "grele-3.nancy.grid5000.fr" : le
-        # cluster est le préfixe avant le premier tiret.
+        # Nœud G5K = "grele-3.nancy.grid5000.fr" : cluster = préfixe avant le tiret.
         cluster = host.split(".")[0].split("-")[0]
         if cluster:
             tags["cluster"] = cluster
@@ -60,16 +52,11 @@ def make_run_name(
     coreset_pct: float,
     imagesize: int = 224,
 ) -> str:
-    """Build a canonical MLflow run name from the key hyperparameters.
+    """Nom de run MLflow canonique à partir des hyperparamètres clés.
 
-    Convention: {backbone(s)}-{sampler}-p{pct}-im{size}
-
-    Examples:
-        make_run_name(["wideresnet50"], "approx_greedy_coreset", 0.1, 224)
-        → "wideresnet50-approx_greedy_coreset-p10-im224"
-
-        make_run_name(["wideresnet50", "resnext101"], "greedy_coreset", 0.01)
-        → "wideresnet50+resnext101-greedy_coreset-p01-im224"
+    Convention : {backbone(s)}-{sampler}-p{pct}-im{size}, p.ex.
+    ["wideresnet50"], "approx_greedy_coreset", 0.1, 224
+    -> "wideresnet50-approx_greedy_coreset-p10-im224".
     """
     backbone = "+".join(backbone_names)
     pct = f"p{int(round(coreset_pct * 100)):02d}"
@@ -77,7 +64,7 @@ def make_run_name(
 
 
 class RunContext:
-    """Handle returned by patchcore_run. Use it to log metrics and artifacts."""
+    """Objet renvoyé par patchcore_run pour logger metrics et artefacts."""
 
     def __init__(self, active_run: mlflow.ActiveRun) -> None:
         self._run = active_run
@@ -92,12 +79,8 @@ class RunContext:
         LOGGER.info("Logged metrics: %s", {k: f"{v:.4f}" for k, v in metrics.items()})
 
     def log_artifacts(self, path: str) -> None:
-        """Log a file or an entire directory as artifacts.
-
-        Also tags the run with the logged file name(s), so the run can be
-        traced back to its output(s) from the MLflow UI/API without having
-        to open the artifact browser.
-        """
+        """Logge un fichier ou tout un dossier comme artefacts, et tague le run
+        avec le(s) nom(s) de fichier pour le retrouver sans ouvrir le browser."""
         if os.path.isdir(path):
             mlflow.log_artifacts(path)
             names = sorted(os.listdir(path))
@@ -116,20 +99,14 @@ def patchcore_run(
     params: Dict[str, Any],
     tracking_uri: Optional[str] = None,
 ):
-    """Context manager for a single PatchCore MLflow run.
+    """Context manager pour un run MLflow PatchCore.
 
-    Usage:
         with patchcore_run("mvtec", "bottle", config) as run:
-            # ... training and evaluation ...
-            run.log_metrics({"instance_auroc": 0.98, "full_pixel_auroc": 0.95})
-            run.log_artifacts("results/segmentation_images/bottle")  # optional
+            run.log_metrics({"instance_auroc": 0.98})
+            run.log_artifacts("results/segmentation_images/bottle")  # optionnel
 
-    Args:
-        experiment:   MLflow experiment name (e.g. "mvtec").
-        run_name:     Name for this specific run (e.g. the dataset category).
-        params:       Flat or nested dict of hyperparameters to log.
-        tracking_uri: Override the tracking URI. Defaults to MLFLOW_TRACKING_URI
-                      env var, then "sqlite:///mlruns.db".
+    tracking_uri surcharge l'URI ; par défaut MLFLOW_TRACKING_URI puis
+    sqlite:///mlruns.db.
     """
     uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI", _DEFAULT_TRACKING_URI)
     mlflow.set_tracking_uri(uri)
@@ -149,7 +126,7 @@ def patchcore_run(
 
 
 def _flatten_params(d: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
-    """Recursively flatten a nested dict to dot-separated string keys."""
+    """Aplatit récursivement un dict imbriqué en clés séparées par des points."""
     out: Dict[str, str] = {}
     for k, v in d.items():
         key = f"{prefix}.{k}" if prefix else k

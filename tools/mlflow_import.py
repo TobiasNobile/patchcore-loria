@@ -1,32 +1,16 @@
 """Fusionne les runs d'une base MLflow source dans la base locale canonique.
 
-Raison d'être : on ne peut PAS rsync une base SQLite MLflow par-dessus une autre
-(ça écrase au lieu de fusionner, et les artifact_uri sont des chemins absolus
-propres à chaque machine). Cet outil lit les runs de la base distante rapatriée
-et les RE-CRÉE dans la base locale (params + historique de metrics + tags +
-artefacts), pour n'avoir au final qu'UNE seule base — plus de mlruns_remote.db.
+On ne peut pas rsync une base SQLite par-dessus une autre (ça écrase, et les
+artifact_uri sont des chemins absolus par machine). Cet outil re-crée les runs de
+la source dans la base locale (params, historique de metrics, tags, artefacts) —
+une seule base au final. Idempotent via le tag import.source_run_id.
 
-Idempotent : chaque run importé est tagué `import.source_run_id`. Relancer
-l'import ne recrée pas ce qui est déjà là (on repère les runs déjà importés).
+Par défaut chaque run garde le nom de son expérience source ; avec
+--route-by-runname on classe par tâche d'après le préfixe du run_name
+(inspect_heatmap -> celeba-heatmap, score_histogram -> celeba-histograms, ...).
 
-Structure : par défaut chaque run est importé dans une expérience de MÊME nom
-que dans la source. Avec --route-by-runname, on classe plutôt par tâche d'après
-le préfixe du run_name (inspect_heatmap -> celeba-heatmap, score_histogram ->
-celeba-histograms, benchmark -> celeba-benchmark), pour ranger l'historique dans
-la même structure "une expérience par tâche" que les nouveaux runs.
-
-Usage typique (appelé par remote_run.sh / grid5000_run.sh après le fetch) :
-
-    python tools/mlflow_import.py \
-        --source-db .mlflow_import/g5k/mlruns.db \
-        --source-artifacts .mlflow_import/g5k/mlruns \
-        --origin g5k --route-by-runname
-
-Migration ponctuelle de l'ancienne base parallèle vers la base unique :
-
-    python tools/mlflow_import.py \
-        --source-db mlruns_remote.db --source-artifacts mlruns_remote \
-        --origin metz --route-by-runname
+    python tools/mlflow_import.py --source-db .mlflow_import/g5k/mlruns.db \
+        --source-artifacts .mlflow_import/g5k/mlruns --origin g5k --route-by-runname
 """
 
 import argparse
@@ -148,9 +132,8 @@ def import_runs(
                 skipped += 1
                 continue
 
-            # Tags : on recopie ceux de l'utilisateur (dont origin si présent),
-            # on laisse tomber les internes mlflow.* (regénérés), et on ajoute la
-            # traçabilité d'import + l'origine si elle manquait.
+            # On recopie les tags utilisateur (dont origin), on laisse les mlflow.*
+            # (regénérés), et on ajoute la traçabilité d'import + l'origine au besoin.
             tags = {
                 k: v for k, v in run.data.tags.items() if not k.startswith("mlflow.")
             }
@@ -172,9 +155,8 @@ def import_runs(
             for chunk in _chunks(params, _PARAM_CHUNK):
                 dst.log_batch(new_run_id, params=chunk)
 
-            # Historique complet de chaque metric (pas seulement la dernière
-            # valeur) : get_metric_history rend des entités Metric réutilisables
-            # telles quelles dans log_batch.
+            # Historique complet de chaque metric : get_metric_history rend des
+            # entités Metric réutilisables telles quelles dans log_batch.
             metrics = []
             for key in run.data.metrics:
                 metrics.extend(src.get_metric_history(src_run_id, key))

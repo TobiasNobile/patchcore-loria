@@ -1,40 +1,24 @@
-"""Measure PatchCore inference throughput: how many heatmaps per second.
+"""Mesure le débit d'inférence de PatchCore : combien de heatmaps par seconde.
 
-Loads a memory bank built by bin/fit_memory_bank_celeba.py and pushes N test
-images through inference, reporting images/second and ms/image for several batch
-sizes. No fitting, no PNG rendering -- this measures the half of PatchCore that
-would have to run in real time.
+Charge une banque et pousse N images test dans l'inférence, en reportant
+images/seconde et ms/image pour plusieurs tailles de batch. Pas de fit, pas de
+rendu PNG : on ne mesure que la moitié de PatchCore qui tournerait en temps réel.
 
     python bin/benchmark_inference_celeba.py
     BENCH_BANK_DIR=models/celeba/..._ts250_s0 python bin/benchmark_inference_celeba.py
 
-What is timed, per image:
+Chronométré, par image : tensor -> backbone -> recherche FAISS -> heatmap 224x224.
 
-    tensor -> backbone (feature extraction) -> FAISS search -> 224x224 heatmap
+Volontairement NON chronométré : le chargement/décodage des images (décodées une
+fois en amont ; en prod les frames viennent d'une caméra), le rendu PNG
+(matplotlib ~100 ms, bien plus que l'inférence), et les batches de warm-up
+(compilation CUDA/cuDNN, 10-100x plus lents ; exclus mais reportés via
+warmup_seconds).
 
-What is deliberately NOT timed, and why:
-
-  - Image loading/decoding. Images are decoded and transformed once, up front,
-    into a tensor. A real deployment gets frames from a camera, not from a
-    Hugging Face dataset, so that cost is not representative.
-  - PNG rendering. matplotlib takes ~100 ms per figure, far more than the
-    inference itself; timing it would measure matplotlib, not PatchCore. A real
-    deployment consumes the heatmap array directly.
-  - Warm-up batches. The first batches pay CUDA kernel compilation and cuDNN
-    autotuning and are 10-100x slower than steady state. They are excluded from
-    the numbers but still measured and reported (warmup_seconds), so the choice
-    is auditable rather than hidden.
-
-Mean and percentiles answer different questions, and a real-time claim needs
-both. The mean (and images_per_second) is capacity: how many images fit in a
-second. The percentiles are deadline reliability: at 30 fps the budget is 33
-ms/image, and a 20 ms mean with an 80 ms p99 still blows that budget on one
-image in a hundred -- a dropped frame every ~3 seconds that the mean alone hides.
-A p50 and p99 far apart mean jitter (GPU scheduling, allocation, thermal
-throttling) rather than a slow model.
-
-Writes a JSON per bank so runs over several banks can be aggregated into a
-throughput-vs-bank-size curve -- bank size is what inference cost scales with.
+On reporte moyenne ET percentiles : la moyenne (images_per_second) est la
+capacité, les percentiles la fiabilité face à une deadline (à 30 fps le budget
+est 33 ms/image ; une moyenne à 20 ms avec un p99 à 80 ms rate le budget une
+image sur cent). Un JSON par banque, pour tracer le débit vs la taille de banque.
 """
 
 import json
@@ -52,26 +36,25 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 LOGGER = logging.getLogger(__name__)
 
 
-# Overridable by env var (BENCH_BANK_DIR) so one job can sweep several banks.
+# Surchargeable par BENCH_BANK_DIR pour balayer plusieurs banques dans un job.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 BANK_DIR = os.environ.get("BENCH_BANK_DIR", BANK_DIR)
 
-# Number of TEST images per batch size
+# Nombre d'images TEST par taille de batch.
 N_IMAGES = 500
 
-# batch=1 is the real-time number: the latency of one frame handled on its own.
+# batch=1 = le chiffre temps réel : la latence d'une frame traitée seule.
 BATCH_SIZES = [1, 8, 32]
 
-# Batches discarded before the clock starts (they pay CUDA/cuDNN warm-up).
-# not take in account for inference measuring
+# Batches écartés avant de lancer le chrono (ils paient le warm-up CUDA/cuDNN).
 WARMUP_BATCHES = 3
 
 OUTPUT_DIR = os.environ.get("BENCH_OUTPUT_DIR", "results/benchmarks")
 
-# GPU/BENCH_DEVICE decides where the *backbone* runs (the embed phase),
-# BENCH_FAISS_GPU decides where the *search* runs. "Full GPU" needs both. The
+# GPU/BENCH_DEVICE décide où tourne le backbone (phase embed), BENCH_FAISS_GPU où
+# tourne la recherche. "Full GPU" nécessite les deux.
 
-GPU = [0]  # [] forces CPU.
+GPU = [0]  # [] force le CPU.
 if os.environ.get("BENCH_DEVICE", "").lower() == "cpu":
     GPU = []
 
@@ -82,33 +65,30 @@ if os.environ.get("BENCH_FAISS_GPU", "").lower() in ("1", "true", "yes"):
 FAISS_NUM_WORKERS = 4
 
 def preload_images(dataset, indices):
-    """Decode + transform every image once, up front, into one CPU tensor.
+    """Décode + transforme chaque image une fois, en amont, en un tensor CPU.
 
-    This is what keeps the measurement about inference: the timed loop then only
-    slices this tensor, so no JPEG decoding happens between the clocks.
+    C'est ce qui garde la mesure sur l'inférence : la boucle chronométrée ne fait
+    que slicer ce tensor, aucun décodage JPEG entre les chronos.
     """
     return torch.stack([dataset[i]["image"] for i in indices])
 
 
 def timed_predict(patchcore_instance, batch, device):
-    """One batch through inference, timed per phase. Returns (embed, search, post).
+    """Un batch dans l'inférence, chronométré par phase. Renvoie (embed, search, post).
 
-    This re-implements the body of PatchCore._predict instead of calling it,
-    because the whole question is which phase costs what:
+    Réimplémente le corps de PatchCore._predict au lieu de l'appeler, car toute la
+    question est de savoir quelle phase coûte quoi :
 
-      embed   backbone forward + patchify + aggregation, ending with the
-              features pulled back to numpy. This is the phase that moves
-              between CPU and GPU, so it is the one a CPU-vs-GPU comparison is
-              about. It never touches the memory bank, so it is independent of
-              bank size.
-      search  the FAISS nearest-neighbour lookup. Runs on CPU with faiss-cpu
-              whatever `device` says, and is the phase that grows with bank size.
-      post    unpatching plus the upsampling to the 224x224 heatmap.
+      embed   backbone + patchify + agrégation, features ramenées en numpy. Phase
+              qui bouge entre CPU et GPU (celle que vise une comparaison CPU/GPU),
+              indépendante de la taille de banque.
+      search  recherche FAISS des plus proches voisins ; tourne sur CPU quel que
+              soit `device`, et grandit avec la taille de banque.
+      post    unpatch + upsampling vers la heatmap 224x224.
 
-    Keep in sync with src/patchcore/patchcore.py::_predict.
-
-    CUDA kernels are asynchronous: without synchronize() around a phase we would
-    time how long it takes to *queue* the work, not to run it.
+    À garder synchro avec src/patchcore/patchcore.py::_predict. Les noyaux CUDA
+    sont asynchrones : sans synchronize() autour d'une phase, on mesurerait le
+    temps de mettre le travail en file, pas de l'exécuter.
     """
     is_cuda = device.type == "cuda"
     batchsize = batch.shape[0]
@@ -163,7 +143,7 @@ def time_batches(patchcore_instance, images, batch_size, device, max_batches=Non
 
 
 def measure(patchcore_instance, images, batch_size, device):
-    """Warm up, then time N images at this batch size. Returns a metrics dict."""
+    """Warm-up, puis chronomètre N images à cette taille de batch. Renvoie un dict."""
     warmup = time_batches(
         patchcore_instance, images, batch_size, device, max_batches=WARMUP_BATCHES
     )
@@ -176,11 +156,10 @@ def measure(patchcore_instance, images, batch_size, device):
     times = embed + search + post
     total_seconds = float(np.sum(times))
 
-    # Per-batch time divided by that batch's size. Only at batch=1 is one
-    # measurement one image, which is what makes the percentiles below true
-    # latencies there: above batch=1 each value is a within-batch average, so a
-    # single slow image is diluted by its neighbours and the tail is smoothed
-    # away. Read the percentiles at batch=1, the throughput at batch 8/32.
+    # Temps par batch divisé par sa taille. Seul batch=1 fait "une mesure = une
+    # image", ce qui rend les percentiles ci-dessous de vraies latences ; au-delà
+    # chaque valeur est une moyenne intra-batch (la queue est lissée). Lire les
+    # percentiles à batch=1, le débit à batch 8/32.
     per_image_ms = []
     for i, t in enumerate(times):
         this_batch = min(batch_size, n_images - i * batch_size)
@@ -196,10 +175,10 @@ def measure(patchcore_instance, images, batch_size, device):
         "images_per_minute": 60.0 * n_images / total_seconds,
         "ms_per_image_mean": 1000.0 * total_seconds / n_images,
         "ms_per_image_embed": 1000.0 * float(embed.sum()) / n_images, # embed = backbone, patchify, interpolation, agrégation, rappartriement des features -> indé de bank size
-        "ms_per_image_search": 1000.0 * float(search.sum()) / n_images, # FAISS search = nearest neighbor, same on GPU and CPU, grows with bank size
+        "ms_per_image_search": 1000.0 * float(search.sum()) / n_images, # recherche FAISS = plus proche voisin, pareil GPU et CPU, grandit avec la banque
         "ms_per_image_postprocess": 1000.0 * float(post.sum()) / n_images, # interpolation bilinéaire (224x224) + flou gaussien
-        # percentiles : one value per batch = (time, batch size)
-        # for size > 1 -> time = mean of 'images times' in the batch
+        # percentiles : une valeur par batch = (temps, taille de batch)
+        # pour size > 1, temps = moyenne des temps d'images du batch
         "ms_per_image_p50": float(np.percentile(per_image_ms, 50)),
         "ms_per_image_p90": float(np.percentile(per_image_ms, 90)), # 90% des images prennent moins ou autant de temps
         "ms_per_image_p99": float(np.percentile(per_image_ms, 99)),
@@ -270,10 +249,9 @@ def main():
         )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # Both switches go in the filename. Runs of the same bank would otherwise
-    # collide and the later one would silently destroy the number the earlier was
-    # measured for -- and "_cuda" alone would suggest a full-GPU result even when
-    # the search ran on CPU, which is exactly the claim not to make.
+    # Les deux switches (device + faiss) vont dans le nom de fichier : sinon deux
+    # runs de la même banque se collisionnent, et "_cuda" seul laisserait croire à
+    # un résultat full-GPU alors que la recherche a tourné sur CPU.
     out_path = os.path.join(
         OUTPUT_DIR,
         "bench_{}_{}_{}.json".format(

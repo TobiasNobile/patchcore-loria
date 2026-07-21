@@ -21,13 +21,9 @@ class DatasetSplit(Enum):
 
 
 class CelebADataset(torch.utils.data.Dataset):
-    """
-    One-class PyTorch Dataset for CelebA, using the `Wearing_Hat` attribute
-    as the anomaly label:
-      - TRAIN: only "normal" (no-hat) images from the CelebA `train` split.
-               This is what the PatchCore memory bank is built from.
-      - TEST: a class-balanced hat / no-hat sample from the CelebA `test`
-              split, for evaluation.
+    """Dataset CelebA one-class : l'attribut `Wearing_Hat` sert de label
+    d'anomalie. TRAIN = images no-hat du split train (pour la banque mémoire) ;
+    TEST = échantillon équilibré hat/no-hat du split test (pour l'évaluation).
     """
 
     def __init__(
@@ -65,7 +61,7 @@ class CelebADataset(torch.utils.data.Dataset):
 
     @staticmethod
     def _balance(dataset, seed):
-        """Subsamples the majority class so hat / no-hat counts match."""
+        """Sous-échantillonne la classe majoritaire pour équilibrer hat/no-hat."""
         is_hat = dataset[_ANOMALY_ATTRIBUTE]
         hat_idx = [i for i, hat in enumerate(is_hat) if hat]
         no_hat_idx = [i for i, hat in enumerate(is_hat) if not hat]
@@ -77,9 +73,8 @@ class CelebADataset(torch.utils.data.Dataset):
 
     @property
     def labels(self):
-        """Ground-truth anomaly labels (0/1) per image, without decoding any
-        image — reads the HF attribute column directly. Same order as
-        __getitem__ / __len__."""
+        """Labels d'anomalie (0/1) par image, sans décoder d'image : lit
+        directement la colonne d'attribut HF. Même ordre que __getitem__."""
         return [int(hat) for hat in self.dataset[_ANOMALY_ATTRIBUTE]]
 
     def __len__(self):

@@ -1,11 +1,10 @@
-"""Saving and loading PatchCore memory banks, with the config they were fit with.
+"""Sauvegarde et chargement des banques mémoire PatchCore, avec la config du fit.
 
-A bank on disk is a directory holding what ``PatchCore.save_to_path`` writes plus
-a ``fit_config.json`` describing how it was built. That sidecar is what lets a
-scoring script reuse a bank safely: preprocessing (``resize`` / ``imagesize``)
-and the split ``seed`` are read back from it rather than restated at the call
-site, since a query embedded differently from the bank it is searched against
-would give meaningless distances -- and would do so silently.
+Une banque sur disque = un dossier contenant ce qu'écrit PatchCore.save_to_path
+plus un fit_config.json décrivant sa construction. Ce sidecar permet de réutiliser
+la banque sans risque : le prétraitement (resize/imagesize) et le seed sont relus
+de là plutôt que redonnés à l'appel — une requête encodée autrement que la banque
+donnerait des distances qui ne veulent rien dire, silencieusement.
 """
 
 import json
@@ -21,7 +20,7 @@ CONFIG_FILENAME = "fit_config.json"
 
 
 def save_bank(patchcore_instance, bank_dir, config):
-    """Write a fitted PatchCore plus the config that produced it to ``bank_dir``."""
+    """Écrit un PatchCore entraîné et la config qui l'a produit dans bank_dir."""
     os.makedirs(bank_dir, exist_ok=True)
     patchcore_instance.save_to_path(bank_dir)
     with open(os.path.join(bank_dir, CONFIG_FILENAME), "w") as fh:
@@ -30,7 +29,7 @@ def save_bank(patchcore_instance, bank_dir, config):
 
 
 def load_bank(bank_dir, device, faiss_on_gpu=False, faiss_num_workers=4):
-    """Rebuild a PatchCore from ``bank_dir``. Returns (patchcore, fit_config)."""
+    """Reconstruit un PatchCore depuis bank_dir. Renvoie (patchcore, fit_config)."""
     config_path = os.path.join(bank_dir, CONFIG_FILENAME)
     if not os.path.exists(config_path):
         raise SystemExit(

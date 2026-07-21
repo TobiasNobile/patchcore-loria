@@ -1,18 +1,14 @@
-"""Fit a PatchCore memory bank on CelebA no-hat images and save it to disk.
+"""Construit une banque mémoire PatchCore sur les images no-hat de CelebA.
 
-Standalone: no CLI, edit the CONFIG block below and run the script. Building the
-bank (feature extraction + coreset) is the expensive, offline half of PatchCore;
-scoring scripts can then load the saved bank and go straight to inference.
+Pas de CLI : on édite le bloc CONFIG puis on lance. Le fit (extraction des
+features + coreset) est la moitié coûteuse et hors-ligne de PatchCore ; les
+scripts de scoring rechargent ensuite la banque.
 
     python bin/fit_memory_bank_celeba.py
 
-Writes to MODELS_DIR/<tag>/:
-    nnscorer_search_index.faiss   the memory bank (FAISS index)
-    patchcore_params.pkl          backbone / layers / dims, for load_from_path
-    fit_config.json               this CONFIG + fit stats, for provenance
-
-<tag> is derived from the CONFIG, so two different configs never overwrite each
-other and re-running an identical config is a no-op you can skip.
+Écrit dans MODELS_DIR/<tag>/ l'index FAISS, patchcore_params.pkl et
+fit_config.json. Le <tag> vient de la CONFIG, donc deux configs différentes ne
+s'écrasent pas et relancer une config identique est inutile.
 """
 
 import logging
@@ -33,16 +29,14 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 LOGGER = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# CONFIG -- edit these, then run the script.
+# CONFIG — à éditer avant de lancer.
 # --------------------------------------------------------------------------- #
 SEED = 0
-GPU = [0]  # [] forces CPU. On a CUDA-less box this falls back to CPU anyway.
+GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Number of no-hat TRAIN images the bank is built from. None = the whole split.
-# Cost scales with this: each image contributes ~784 patch features, and the
-# greedy coreset needs PERCENTAGE x that many sequential iterations.
-# Overridable by env var (FIT_TRAIN_SUBSET=10000) so one job can sweep several
-# sizes without editing this file; unset, it uses the value below.
+# Nombre d'images no-hat du train pour construire la banque. None = tout le split.
+# Le coût grimpe avec (chaque image ~784 features, coreset séquentiel).
+# Surchargeable par FIT_TRAIN_SUBSET pour balayer plusieurs tailles.
 TRAIN_SUBSET = 2000
 _env_ts = os.environ.get("FIT_TRAIN_SUBSET")
 if _env_ts:
@@ -55,14 +49,11 @@ TARGET_EMBED_DIMENSION = 1024
 PATCHSIZE = 3
 ANOMALY_SCORER_NUM_NN = 1
 
-# "identity" keeps every feature (no coreset computed at all -- fastest fit,
-# biggest bank, slowest inference). "approx_greedy_coreset" compresses the bank
-# to PERCENTAGE of its features: slow to build, but this is the lever that makes
-# inference fast.
+# identity = pas de coreset (fit rapide, grosse banque, inférence lente) ;
+# approx_greedy_coreset compresse la banque à PERCENTAGE des features (le levier
+# qui rend l'inférence rapide).
 SAMPLER_NAME = "approx_greedy_coreset"
-# Fraction du nuage de features conservée par le coreset. Surchargeable par env
-# var (FIT_CORESET_PCT=0.05) pour balayer plusieurs pourcentages sans éditer ce
-# fichier ; non définie, la valeur ci-dessous s'applique.
+# Fraction des features gardée par le coreset. Surchargeable par FIT_CORESET_PCT.
 PERCENTAGE = 0.1
 _env_pct = os.environ.get("FIT_CORESET_PCT")
 if _env_pct:
@@ -81,7 +72,7 @@ MODELS_DIR = "models/celeba"
 
 
 def build_tag():
-    """Filesystem tag identifying the bank this CONFIG produces."""
+    """Tag de fichier identifiant la banque produite par cette CONFIG."""
     sampler = (
         "identity"
         if SAMPLER_NAME == "identity"

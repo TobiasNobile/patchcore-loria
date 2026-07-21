@@ -108,13 +108,13 @@ RSYNC_OPTS=(-avz --partial)
 
 # ─── Rapatriement (étape 3, ou seule action avec --fetch) ─────────────────
 fetch_results() {
-  echo "📥  Récupération des résultats..."
+  echo "Récupération des résultats..."
   rsync "${RSYNC_OPTS[@]}" \
     "${G5K_HOST}:${REMOTE_DIR}/results/" \
     "${LOCAL_DIR}/results/" 2>/dev/null || echo "  (pas de dossier results/ à rapatrier)"
 
   # MLflow : rapatriement temporaire puis fusion dans la base locale unique.
-  echo "📥  Récupération de la base MLflow (temporaire ${IMPORT_TMP})..."
+  echo "Récupération de la base MLflow (temporaire ${IMPORT_TMP})..."
   mkdir -p "${LOCAL_DIR}/${IMPORT_TMP}/mlruns"
   rsync "${RSYNC_OPTS[@]}" \
     "${G5K_HOST}:${REMOTE_DIR}/mlruns.db" \
@@ -123,7 +123,7 @@ fetch_results() {
     "${G5K_HOST}:${REMOTE_DIR}/mlruns/" \
     "${LOCAL_DIR}/${IMPORT_TMP}/mlruns/" 2>/dev/null || echo "  (pas d'artefacts mlruns/ distants)"
   if [[ -f "${LOCAL_DIR}/${IMPORT_TMP}/mlruns.db" ]]; then
-    echo "🔀  Fusion des runs Grid'5000 dans la base locale unique (mlruns.db)..."
+    echo "Fusion des runs Grid'5000 dans la base locale unique (mlruns.db)..."
     ( cd "${LOCAL_DIR}" && "${LOCAL_PYTHON}" tools/mlflow_import.py \
         --source-db "${IMPORT_TMP}/mlruns.db" \
         --source-artifacts "${IMPORT_TMP}/mlruns" \
@@ -131,7 +131,7 @@ fetch_results() {
   fi
 
   if [[ "${FETCH_BANKS}" == "true" ]]; then
-    echo "📥  Récupération des banques mémoire..."
+    echo "Récupération des banques mémoire..."
     rsync "${RSYNC_OPTS[@]}" \
       "${G5K_HOST}:${REMOTE_DIR}/models/celeba/" \
       "${LOCAL_DIR}/models/celeba/" 2>/dev/null || echo "  (pas de banque à rapatrier)"
@@ -139,15 +139,15 @@ fetch_results() {
 }
 
 if [[ "${SCRIPT}" == "--fetch" ]]; then
-  echo "🔎  État des jobs OAR :"
+  echo "État des jobs OAR :"
   "${SSH_FRONTEND[@]}" "oarstat -u" || true
   fetch_results
-  echo "✅  Terminé."
+  echo "Terminé."
   exit 0
 fi
 
 # ─── 1. Sync : local → frontale ───────────────────────────────────────────
-echo "📤  Envoi du code vers ${G5K_HOST}..."
+echo "Envoi du code vers ${G5K_HOST}..."
 rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" \
   "${LOCAL_DIR}/" \
   "${G5K_HOST}:${REMOTE_DIR}/"
@@ -163,7 +163,7 @@ if [[ -n "${OAR_PROPERTIES}" ]]; then
   PROPERTY_FLAG="-p \"${OAR_PROPERTIES}\""
 fi
 
-echo "🚀  Réservation d'un nœud GPU (queue ${OAR_QUEUE}, gpu=${OAR_GPU}, walltime=${OAR_WALLTIME})..."
+echo "Réservation d'un nœud GPU (queue ${OAR_QUEUE}, gpu=${OAR_GPU}, walltime=${OAR_WALLTIME})..."
 echo "    puis exécution de ${SCRIPT}${QUOTED_ARGS}"
 
 # OAR n'a pas d'équivalent bloquant de `srun` : `oarsub -I` ouvre un shell
@@ -183,10 +183,10 @@ JOB_ID=\$(oarsub -q "${OAR_QUEUE}" \
   | sed -n 's/^OAR_JOB_ID=//p')
 
 if [[ -z "\${JOB_ID}" ]]; then
-  echo "❌  oarsub n'a pas rendu de job id (réservation refusée ?)." >&2
+  echo "oarsub n'a pas rendu de job id (réservation refusée ?)." >&2
   exit 1
 fi
-echo "🎟️   Job OAR \${JOB_ID} soumis."
+echo "Job OAR \${JOB_ID} soumis."
 
 if [[ "${DETACH}" == "true" ]]; then
   echo
@@ -216,7 +216,7 @@ sleep 2                       # laisse tail -f rattraper les dernières lignes
 kill \${TAIL_PID} 2>/dev/null || true
 
 STATE=\$(oarstat -s -j "\${JOB_ID}" | cut -d: -f2 | tr -d ' ')
-echo "🏁  Job \${JOB_ID} terminé (état : \${STATE})."
+echo "Job \${JOB_ID} terminé (état : \${STATE})."
 [[ "\${STATE}" == "Error" ]] && exit 1
 exit 0
 REMOTE_SCRIPT
@@ -225,4 +225,4 @@ REMOTE_SCRIPT
 # En mode détaché on s'est déjà arrêté plus haut : le job n'a rien produit encore.
 fetch_results
 
-echo "✅  Terminé."
+echo "Terminé."

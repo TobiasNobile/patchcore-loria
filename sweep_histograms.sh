@@ -6,16 +6,12 @@
 #     plus proches voisins : 3 et 1                          (paramètre de scoring)
 #     coreset : 10% et 5%                                    (0.1 et 0.05)
 #
-# soit 6 x 2 x 2 = 24 histogrammes. Chaque run écrit un PNG + un sidecar JSON
-# contenant, entre autres, l'indice de Jaccard du recouvrement des deux
-# distributions (= FP+FN incompressibles / taille de l'union, cf.
-# histogram_jaccard dans bin/score_histogram_celeba.py).
+# soit 6 x 2 x 2 = 24 histogrammes. Chaque run écrit un PNG + un sidecar JSON avec
+# l'indice de Jaccard (cf. histogram_jaccard dans score_histogram_celeba.py).
 #
-# Optimisation clé : le nombre de voisins n'intervient QU'AU SCORING, pas dans la
-# construction du coreset. La banque est donc identique pour nn=1 et nn=3 -> on ne
-# fitte que 6 x 2 = 12 banques (une par taille x pourcentage), puis on score
-# chacune deux fois en surchargeant num_nn via HIST_NUM_NN. On ne re-fitte jamais
-# une banque déjà présente (présence de fit_config.json).
+# Le nombre de voisins n'intervient qu'au scoring, pas dans le coreset : la banque
+# est identique pour nn=1 et nn=3, donc on ne fitte que 12 banques (une par taille
+# x pourcentage) et on score chacune deux fois via HIST_NUM_NN. Fit idempotent.
 #
 # Usage :
 #   ./sweep_histograms.sh                 # dans un env où `python` voit le projet
@@ -57,41 +53,36 @@ bank_tag() {  # $1 = pct, $2 = train_subset
   printf '%s_%s_p%g_ts%s_s%s' "${BACKBONE}" "${SAMPLER}" "$1" "$2" "${SEED}"
 }
 
-echo "════════════════════════════════════════════════════════════════════"
-echo " Balayage : ${#SIZES[@]} tailles x ${#NNS[@]} voisins x ${#PCTS[@]} pourcentages"
-echo "          = $(( ${#SIZES[@]} * ${#NNS[@]} * ${#PCTS[@]} )) histogrammes,"
-echo "            $(( ${#SIZES[@]} * ${#PCTS[@]} )) banques à (re)construire au plus."
-echo "════════════════════════════════════════════════════════════════════"
+echo "Balayage : ${#SIZES[@]} tailles x ${#NNS[@]} voisins x ${#PCTS[@]} pourcentages"
+echo "  = $(( ${#SIZES[@]} * ${#NNS[@]} * ${#PCTS[@]} )) histogrammes, $(( ${#SIZES[@]} * ${#PCTS[@]} )) banques à (re)construire au plus."
 
 for pct in "${PCTS[@]}"; do
   for size in "${SIZES[@]}"; do
     tag="$(bank_tag "${pct}" "${size}")"
     bank_dir="${MODELS_DIR}/${tag}"
 
-    # ─── Fit (idempotent) : une banque par (taille, pourcentage) ────────────
+    # Fit (idempotent) : une banque par (taille, pourcentage).
     if [[ -f "${bank_dir}/fit_config.json" ]]; then
-      echo "▶ Banque déjà présente, fit sauté : ${bank_dir}"
+      echo "Banque déjà présente, fit sauté : ${bank_dir}"
     else
-      echo "▶ Fit banque  ts=${size}  coreset=${pct} → ${bank_dir}"
+      echo "Fit banque ts=${size} coreset=${pct} -> ${bank_dir}"
       FIT_TRAIN_SUBSET="${size}" FIT_CORESET_PCT="${pct}" \
         "${PYTHON}" bin/fit_memory_bank_celeba.py
     fi
 
-    # ─── Score : nn=3 puis nn=1 sur la MÊME banque (pas de re-fit) ──────────
+    # Score : nn=3 puis nn=1 sur la même banque (pas de re-fit).
     for nn in "${NNS[@]}"; do
       out="${OUT_DIR}/hist_ts${size}_p${pct}_nn${nn}.png"
-      echo "  · Histogramme  ts=${size}  coreset=${pct}  nn=${nn} → ${out}"
+      echo "  Histogramme ts=${size} coreset=${pct} nn=${nn} -> ${out}"
       HIST_BANK_DIR="${bank_dir}" HIST_OUTPUT_PATH="${out}" HIST_NUM_NN="${nn}" \
         "${PYTHON}" bin/score_histogram_celeba.py --n_per_class "${N_PER_CLASS}"
     done
   done
 done
 
-# ─── Récapitulatif : indice de Jaccard de chaque config, trié ──────────────
+# Récapitulatif : indice de Jaccard de chaque config, trié.
 echo
-echo "════════════════════════════════════════════════════════════════════"
-echo " Récapitulatif (indice de Jaccard = recouvrement, plus bas = mieux séparé)"
-echo "════════════════════════════════════════════════════════════════════"
+echo "Récapitulatif (indice de Jaccard = recouvrement, plus bas = mieux séparé) :"
 "${PYTHON}" - "${OUT_DIR}" <<'PY'
 import glob, json, os, sys
 
@@ -119,4 +110,4 @@ for ts, pct, nn, jac, w1, auroc, npc in rows:
 PY
 
 echo
-echo "✅  Terminé — ${OUT_DIR}/hist_ts*_p*_nn*.png (+ sidecars .json)."
+echo "Terminé — ${OUT_DIR}/hist_ts*_p*_nn*.png (+ sidecars .json)."
