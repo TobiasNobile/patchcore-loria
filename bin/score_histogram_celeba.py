@@ -94,6 +94,38 @@ def normalized_wasserstein(scores_a, scores_b):
     return {"w1": w1, "w1_normalized": w1_normalized, "pooled_std": pooled_std}
 
 
+def histogram_jaccard(scores_a, scores_b, edges):
+    """Indice de Jaccard du recouvrement des deux distributions, sur les MÊMES
+    bins que l'histogramme tracé.
+
+    Sur chaque bin i, avec les effectifs n_i (no-hat) et a_i (hat) :
+
+        intersection = somme_i min(n_i, a_i)   masse commune aux deux distributions
+                                               (la zone où elles se recouvrent)
+        union        = somme_i max(n_i, a_i)   = N_no-hat + N_hat - intersection
+        jaccard      = intersection / union
+
+    L'intersection compte, bin par bin, les images de la classe minoritaire : ce
+    sont exactement celles qu'un classifieur par seuil (vote majoritaire par bin)
+    se tromperait forcément — les Faux Positifs + Faux Négatifs incompressibles.
+    D'où la lecture "proportion de FP/FN rapportée à la taille de l'union".
+
+        J = 0  distributions disjointes  -> séparables sans erreur
+        J = 1  distributions identiques  -> recouvrement total
+
+    Fonction pure : renvoie {jaccard, intersection, union}.
+    """
+    n = np.histogram(np.asarray(scores_a, dtype=float), bins=edges)[0]
+    a = np.histogram(np.asarray(scores_b, dtype=float), bins=edges)[0]
+    inter = int(np.minimum(n, a).sum())
+    union = int(np.maximum(n, a).sum())
+    return {
+        "jaccard": inter / union if union > 0 else float("nan"),
+        "intersection": inter,
+        "union": union,
+    }
+
+
 def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[float, bool]:
     """
     Runs a scipy unilateral t-test between distributions of scores of good labels (ex: no-hat) and scores of anomaly labels (ex: hat).
@@ -137,6 +169,22 @@ def main(n_per_class):
     patchcore_instance, fit_config = patchcore.banks.load_bank(
         BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
     )
+
+    # Nombre de plus proches voisins utilisé pour le score : c'est un paramètre
+    # de SCORING (pas de construction du coreset -> la banque est identique quel
+    # que soit num_nn), donc surchargeable ici sans re-fitter, via HIST_NUM_NN.
+    # imagelevel_nn a capturé l'ancien k dans sa closure à la construction du
+    # scorer : régler l'attribut ne suffit pas, on rebinde la lambda.
+    num_nn_used = int(fit_config.get("anomaly_scorer_num_nn", 1))
+    _env_num_nn = os.environ.get("HIST_NUM_NN")
+    if _env_num_nn:
+        num_nn_used = int(_env_num_nn)
+        scorer = patchcore_instance.anomaly_scorer
+        scorer.n_nearest_neighbours = num_nn_used
+        scorer.imagelevel_nn = (
+            lambda q, s=scorer, k=num_nn_used: s.nn_method.run(k, q)
+        )
+        LOGGER.info("num_nn surchargé à %d (HIST_NUM_NN).", num_nn_used)
     # Le seed de la banque pilote aussi le sous-échantillonnage équilibré du
     # split TEST : on reste sur les mêmes images d'une analyse à l'autre.
     seed = fit_config["seed"]
@@ -176,6 +224,7 @@ def main(n_per_class):
     device_is_cuda = device.type == "cuda"
     mlflow_params = {
         "bank_dir": BANK_DIR,
+        "num_nn": num_nn_used,
         "n_per_class_requested": n_per_class,
         "device": str(device),
         "torch_version": torch.__version__,
@@ -223,6 +272,9 @@ def main(n_per_class):
         hi = lo + 1e-6
     edges = np.linspace(lo, hi, BINS + 1)
 
+    # Recouvrement des deux distributions sur ces mêmes bins (FP/FN / union).
+    jac = histogram_jaccard(normal_scores, anomaly_scores, edges)
+
     plt.figure(figsize=(8, 5))
     plt.hist(
         normal_scores, bins=edges, alpha=0.65, color=COLOR_NORMAL,
@@ -238,8 +290,9 @@ def main(n_per_class):
     tag = "identity" if sampler_name == "identity" else "{} p={}".format(
         sampler_name, percentage
     )
-    plt.title("{}  |  ts={}  |  W1 norm={:.3f}  |  p={:.2e}".format(
-        tag, fit_config["train_subset"], wass["w1_normalized"], p_value
+    plt.title("{}  |  ts={}  |  nn={}  |  W1n={:.3f}  |  J={:.3f}".format(
+        tag, fit_config["train_subset"], num_nn_used,
+        wass["w1_normalized"], jac["jaccard"],
     ))
     plt.legend()
     plt.grid(True, alpha=0.2)
@@ -254,6 +307,11 @@ def main(n_per_class):
     # quand des tâches parallèles se disputent le verrou -> on ne laisse jamais
     # ça détruire un résultat déjà calculé (figure + JSON écrits avant).
     metrics = {
+        "jaccard": jac["jaccard"],
+        "jaccard_intersection": jac["intersection"],
+        "jaccard_union": jac["union"],
+        "num_nn_used": num_nn_used,
+        "bins": BINS,
         "w1_normalized": wass["w1_normalized"],
         "w1": wass["w1"],
         "p_value": p_value,

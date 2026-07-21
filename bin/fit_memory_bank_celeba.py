@@ -60,7 +60,13 @@ ANOMALY_SCORER_NUM_NN = 1
 # to PERCENTAGE of its features: slow to build, but this is the lever that makes
 # inference fast.
 SAMPLER_NAME = "approx_greedy_coreset"
+# Fraction du nuage de features conservée par le coreset. Surchargeable par env
+# var (FIT_CORESET_PCT=0.05) pour balayer plusieurs pourcentages sans éditer ce
+# fichier ; non définie, la valeur ci-dessous s'applique.
 PERCENTAGE = 0.1
+_env_pct = os.environ.get("FIT_CORESET_PCT")
+if _env_pct:
+    PERCENTAGE = float(_env_pct)
 
 RESIZE = 256
 IMAGESIZE = 224
