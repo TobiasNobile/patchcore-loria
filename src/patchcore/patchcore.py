@@ -168,9 +168,28 @@ class PatchCore(torch.nn.Module):
             for image in data_iterator:
                 if isinstance(image, dict):
                     image = image["image"]
-                features.append(_image_to_features(image))
+                # _embed rend une liste contenant un tableau 1D par patch. On la
+                # compacte immédiatement en un bloc 2D : sinon le nuage complet
+                # reste éclaté en des millions de petits objets numpy (15,7 M
+                # pour 20 000 images), avec l'occupation mémoire que cela suppose.
+                features.append(np.asarray(_image_to_features(image)))
 
-        features = np.concatenate(features, axis=0)
+        # np.concatenate ferait coexister la liste des blocs et son résultat,
+        # soit deux fois le nuage en mémoire (120 Go pour 20 000 images, de quoi
+        # faire tuer le processus par le noyau). On préalloue le tableau final et
+        # on y recopie chaque bloc en le libérant au passage : le pic retombe au
+        # nuage plus un bloc.
+        total = sum(len(block) for block in features)
+        stacked = np.empty(
+            (total, features[0].shape[1]), dtype=features[0].dtype
+        )
+        offset = 0
+        for i in range(len(features)):
+            block = features[i]
+            stacked[offset : offset + len(block)] = block
+            offset += len(block)
+            features[i] = None
+        features = stacked
         features = self.featuresampler.run(features)
 
         self.anomaly_scorer.fit(detection_features=[features])

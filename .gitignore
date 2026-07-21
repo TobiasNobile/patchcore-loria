@@ -7,10 +7,7 @@ mlruns.db.bak-*
 # Dossier temporaire où remote_run.sh / grid5000_run.sh déposent la base
 # distante le temps de l'importer dans mlruns.db (tools/mlflow_import.py).
 .mlflow_import/
-# Anciennes bases parallèles, désormais fusionnées dans mlruns.db (legacy).
-mlruns_remote/
-mlruns_array/
-mlruns_remote.db
+.pytest_cache/
 .env
 results
 

@@ -14,35 +14,7 @@ _For questions & feedback, please reach out to karsten.rh1@gmail.com!_
 
 ## Quick Guide
 
-### 1. Environment setup
-
-```shell
-# Install dependencies
-uv sync --extra dev
-
-# Configure local paths (never committed)
-cp .env.example .env   # then edit if your paths differ
-source .env
-```
-
-The dataset lives **outside the repository**, at a stable path on your machine or compute server:
-
-| Machine        | `MVTEC_PATH`                                              |
-|----------------|-----------------------------------------------------------|
-| Local (dev)    | `$HOME/dev/telecom/stage_1a_data/mvtec_anomaly_detection` |
-| Compute server | set in `.env` on that machine (e.g. `/scratch/<user>/...`) |
-
-Download MVTec AD from <https://www.mvtec.com/company/research/datasets/mvtec-ad> and extract it so the layout is:
-
-```
-$MVTEC_PATH/
-├── bottle/
-├── cable/
-└── ...   (15 categories total)
-```
-
-### 2. Reference training run
-
+First, clone this repository and set the `PYTHONPATH` environment variable with `env PYTHONPATH=src python bin/run_patchcore.py`.
 To train PatchCore on MVTec AD (as described below), run
 
 ```
@@ -81,54 +53,6 @@ dataset --resize 366 --imagesize 320 "${dataset_flags[@]}" mvtec $datapath
 
 A set of pretrained PatchCores are hosted here: __add link__. To use them (and replicate training),
 check out `sample_evaluation.sh` and `sample_training.sh`.
-
----
-
-## MLflow Tracking
-
-Runs are tracked locally with MLflow. Start the UI with:
-
-```shell
-uv run mlflow ui --backend-store-uri sqlite:///mlruns.db --port 5001
-# then open http://localhost:5001
-```
-
-### Naming convention
-
-| MLflow field  | Value                                   | Example                                          |
-|---------------|-----------------------------------------|--------------------------------------------------|
-| `experiment`  | Dataset name                            | `mvtec`                                          |
-| `run_name`    | `{backbone}-{sampler}-p{pct}-im{size}` | `wideresnet50-approx_greedy_coreset-p10-im224`   |
-| tag `category`| MVTec subdataset                        | `bottle`                                         |
-
-**Backbone** — model name as passed to `-b` (e.g. `wideresnet50`). For ensembles, join with `+`:
-`wideresnet50+resnext101`.
-
-**Sampler** — coreset method (`approx_greedy_coreset`, `greedy_coreset`, `identity`).
-
-**pct** — coreset percentage × 100, zero-padded to 2 digits: `-p 0.1` → `p10`, `-p 0.01` → `p01`.
-
-**im** — final image size after centre-crop (`--imagesize`).
-
-### Logged metrics (per run)
-
-| Key                   | Description                                      |
-|-----------------------|--------------------------------------------------|
-| `instance_auroc`      | Image-level AUROC                                |
-| `full_pixel_auroc`    | Pixel-level AUROC on all test images             |
-| `anomaly_pixel_auroc` | Pixel-level AUROC restricted to anomalous images |
-
-Use `patchcore.tracking.make_run_name` to build the run name programmatically:
-
-```python
-from patchcore.tracking import make_run_name, patchcore_run
-
-run_name = make_run_name(["wideresnet50"], "approx_greedy_coreset", 0.1, 224)
-# → "wideresnet50-approx_greedy_coreset-p10-im224"
-
-with patchcore_run(experiment="mvtec", run_name=run_name, params=config) as run:
-    run.log_metrics({"instance_auroc": auroc, ...})
-```
 
 ---
 
@@ -281,76 +205,61 @@ If you use the code in this repository, please cite
 }
 ```
 
-## Jalon 1 — PatchCore on CelebA
+## CelebA — résumé des résultats
 
-### Dataset
+Extension de PatchCore à CelebA, l'attribut `Wearing_Hat` servant de label
+d'anomalie : la banque mémoire est construite sur des visages sans chapeau, et
+l'on compare les distributions de scores no-hat vs hat sur un échantillon test
+équilibré (839 images par classe).
 
-Loaded via HuggingFace `datasets` (see `src/patchcore/celeba.py`):
+L'indice de Jaccard mesure le recouvrement des deux distributions sur les bins
+de l'histogramme (intersection / union), c'est-à-dire la proportion de faux
+positifs et faux négatifs incompressibles. Plus bas = mieux séparé.
 
-```python
-from datasets import load_dataset
-ds = load_dataset("flwrlabs/celeba")  # train / valid / test splits, cached locally
-```
+Balayage à coreset fixé à 5 %, backbone `wideresnet50` :
 
-Cached locally under `~/.cache/huggingface/hub/datasets--flwrlabs--celeba/.../img_align+identity+attr/*.parquet`.
-Each row has an `image` plus 40 boolean CelebA attributes (`Wearing_Hat`, `Male`, `Smiling`, ...).
+| Images d'entraînement | Banque | Voisins | Jaccard | AUROC | W1 normalisée |
+| --- | --- | --- | --- | --- | --- |
+| 1 000  | 39 200  | 1 | 0,3856 | 0,7808 | 0,983 |
+| 1 000  | 39 200  | 3 | 0,3856 | 0,7772 | 0,966 |
+| 2 000  | 78 400  | 1 | 0,3732 | 0,7868 | 1,016 |
+| 2 000  | 78 400  | 3 | 0,3799 | 0,7822 | 0,992 |
+| 5 000  | 196 000 | 1 | 0,3777 | 0,7951 | 1,063 |
+| 5 000  | 196 000 | 3 | 0,3788 | 0,7904 | 1,042 |
+| 10 000 | 392 000 | 1 | 0,3565 | 0,8035 | 1,103 |
+| 10 000 | 392 000 | 3 | 0,3642 | 0,7994 | 1,082 |
 
-### Hat / No-hat class imbalance
+L'AUROC et la distance de Wasserstein normalisée progressent régulièrement avec
+la taille de banque, tandis que le Jaccard reste dans un mouchoir jusqu'à 5 000
+avant de baisser nettement à 10 000. La configuration `ts=20000` reste à produire.
 
-Counted directly from the `Wearing_Hat` boolean column of the cached parquet shards (no image
-decoding required), 2026-07-01:
+Le coreset est quadratique en nombre de features : au-delà de 20 000 images
+d'entraînement, le fit dépasse la journée de calcul et la mémoire d'un nœud
+ordinaire (le nuage brut atteint 60 Go, doublé pendant sa concaténation).
 
-| Split   | Hat   | No hat  | Total   | Hat %  |
-|---------|-------|---------|---------|--------|
-| train   | 8,039 | 154,731 | 162,770 | 4.94%  |
-| valid   |   940 |  18,927 |  19,867 | 4.73%  |
-| test    |   839 |  19,123 |  19,962 | 4.20%  |
-| **all** | **9,818** | **192,781** | **202,599** | **4.85%** |
-
-→ Roughly 1 "hat" image for every ~20 "no-hat" images (ratio ≈ 1:19.6 across the full dataset).
-This is a strong, naturally-occurring class imbalance — relevant if `Wearing_Hat` is used to
-define the normal/anomalous split for the PatchCore experiment on CelebA.
-
-### One-class train / test split
-
-Implemented in `src/patchcore/datasets/celeba.py` (`CelebADataset`, mirrors the `MVTecDataset`
-interface). `Wearing_Hat` defines the anomaly label:
-
-- **Train** (`DatasetSplit.TRAIN`): only "no-hat" images from the CelebA `train` split — the
-  PatchCore memory bank only ever sees "normal" data. 154,731 images.
-- **Test** (`DatasetSplit.TEST`): hat + no-hat images from the CelebA `test` split, **balanced**
-  by randomly subsampling the majority (no-hat) class down to the minority (hat) count
-  (`seed`-controlled, default `0`). 839 hat + 839 no-hat = 1,678 images.
-
-```python
-from patchcore.datasets.celeba import CelebADataset, DatasetSplit
-
-train_dataset = CelebADataset(split=DatasetSplit.TRAIN)               # 154,731 no-hat images
-test_dataset = CelebADataset(split=DatasetSplit.TEST, seed=0)         # 839 + 839 balanced images
-```
-
-### Running PatchCore on CelebA
-
-Fitting and inference are two separate scripts, because they have very different costs. Building the
-memory bank is dominated by the coreset — a sequential selection whose iteration count grows with
-`TRAIN_SUBSET` × `PERCENTAGE` — and it only has to happen once. Scoring an image against a saved bank
-is the fast half, and the one that has to run in real time. Both scripts hold their hyperparameters
-in a `CONFIG` block at the top of the file; edit it and run, no flags to remember.
+Reproduction :
 
 ```shell
-python bin/fit_memory_bank_celeba.py                    # once: writes models/celeba/<tag>/
-python bin/infer_heatmap_celeba.py                      # heatmap overlay, default image
-python bin/infer_heatmap_celeba.py --image_index 900    # any other test image
+./sweep_histograms.sh                        # en local
+./grid5000_run.sh sweep_histograms.sh        # sur Grid'5000
 ```
 
-`<tag>` encodes the config (backbone, sampler, percentage, train subset, seed), so different configs
-never overwrite each other, and each bank carries a `fit_config.json` recording how it was built.
-`infer_heatmap_celeba.py` reads `resize` / `imagesize` back from that file rather than restating
-them: a query embedded differently from the bank it is searched against would give meaningless
-distances.
+Les variables d'environnement disponibles (tailles, pourcentages, nombre de
+voisins, emplacement des banques, reprise) sont documentées en tête de
+`sweep_histograms.sh`.
 
-Pixel-level evaluation (real "hat" segmentation ground-truth, sourced from CelebAMask-HQ) is a
-follow-up step, not yet wired in.
+## MLflow
+
+Tous les runs vivent dans une base unique, y compris ceux rapatriés des serveurs
+distants. Chaque run porte un tag `origin` (`local`, `g5k`, `metz`) et une
+expérience par tâche (`celeba-histograms`, `celeba-heatmap`) :
+
+```shell
+mlflow ui --backend-store-uri sqlite:///mlruns.db
+```
+
+Les runs distants sont fusionnés dans cette base au moment du rapatriement
+(`./grid5000_run.sh --fetch`), via `tools/mlflow_import.py`.
 
 ## Security
 

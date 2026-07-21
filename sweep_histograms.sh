@@ -45,6 +45,11 @@ MODELS_DIR="${MODELS_DIR:-models/celeba}"
 # false = supprime chaque banque une fois scorée, ce qui borne le pic disque à
 # une seule banque. Défaut true pour ne jamais effacer des banques persistantes.
 KEEP_BANKS="${KEEP_BANKS:-true}"
+
+# Reprise : on saute les configurations dont le sidecar JSON existe déjà. Les
+# banques vivant sur le disque du nœud disparaissent avec le job, donc sans ça
+# un run interrompu recommencerait tout. SKIP_EXISTING=false pour tout refaire.
+SKIP_EXISTING="${SKIP_EXISTING:-true}"
 OUT_DIR="${OUT_DIR:-results/histograms/sweep}"
 
 # Surchargeables par env var pour un test rapide, ex : SIZES="1000 2000".
@@ -83,6 +88,21 @@ for size in "${SIZES[@]}"; do
     tag="$(bank_tag "${pct}" "${size}")"
     bank_dir="${MODELS_DIR}/${tag}"
 
+    # Ne garder que les voisins dont l'histogramme manque : inutile de refitter
+    # une banque dont tous les scorings sont déjà sur disque.
+    todo=()
+    for nn in "${NNS[@]}"; do
+      if [[ "${SKIP_EXISTING}" == "true" \
+            && -f "${OUT_DIR}/hist_ts${size}_p${pct}_nn${nn}.json" ]]; then
+        continue
+      fi
+      todo+=("${nn}")
+    done
+    if [[ ${#todo[@]} -eq 0 ]]; then
+      echo "ts=${size} coreset=${pct} : déjà complet, sauté."
+      continue
+    fi
+
     # Fit (idempotent) : une banque par (taille, pourcentage).
     if [[ -f "${bank_dir}/fit_config.json" ]]; then
       echo "Banque déjà présente, fit sauté : ${bank_dir}"
@@ -93,7 +113,7 @@ for size in "${SIZES[@]}"; do
     fi
 
     # Score : nn=3 puis nn=1 sur la même banque (pas de re-fit).
-    for nn in "${NNS[@]}"; do
+    for nn in "${todo[@]}"; do
       out="${OUT_DIR}/hist_ts${size}_p${pct}_nn${nn}.png"
       echo "  Histogramme ts=${size} coreset=${pct} nn=${nn} -> ${out}"
       HIST_BANK_DIR="${bank_dir}" HIST_OUTPUT_PATH="${out}" HIST_NUM_NN="${nn}" \

@@ -52,7 +52,7 @@ class GreedyCoresetSampler(BaseSampler):
         self.device = device
         self.dimension_to_project_features_to = dimension_to_project_features_to
 
-    def _reduce_features(self, features, chunk_size=1 << 20):
+    def _reduce_features(self, features, chunk_bytes=256 * 1024 ** 2):
         if features.shape[1] == self.dimension_to_project_features_to:
             return features
         mapper = torch.nn.Linear(
@@ -60,20 +60,26 @@ class GreedyCoresetSampler(BaseSampler):
         )
         _ = mapper.to(self.device)
         # Projection par morceaux. Transférer le nuage complet non projeté sur le
-        # device coûterait N x 1024 x 4 octets (150 Go pour 50 000 images, soit
-        # plus que n'importe quel GPU), alors que seul le résultat en
+        # device coûterait N x 1024 x 4 octets (60 Go pour 20 000 images, soit
+        # plus que la plupart des GPU), alors que seul le résultat en
         # dimension_to_project_features_to est utilisé ensuite : on ne transfère
         # donc qu'un bloc à la fois. Résultat numériquement identique, le mapper
         # étant appliqué ligne à ligne.
+        #
+        # La taille du bloc se compte en OCTETS, pas en lignes : une ligne pèse
+        # déjà features.shape[1] x 4 octets, donc raisonner en lignes conduit à
+        # des transferts de plusieurs Go qui saturent le GPU.
         projected = torch.empty(
             (features.shape[0], self.dimension_to_project_features_to),
             device=self.device,
             dtype=mapper.weight.dtype,
         )
+        rows = max(1, chunk_bytes // (features.shape[1] * features.element_size()))
         with torch.no_grad():
-            for start in range(0, features.shape[0], chunk_size):
-                block = features[start : start + chunk_size].to(self.device)
-                projected[start : start + chunk_size] = mapper(block)
+            for start in range(0, features.shape[0], rows):
+                block = features[start : start + rows].to(self.device)
+                projected[start : start + rows] = mapper(block)
+                del block
         return projected
 
     def run(
