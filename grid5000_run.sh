@@ -54,15 +54,22 @@ OAR_QUEUE="abaca"
 OAR_GPU=1
 OAR_WALLTIME="${OAR_WALLTIME:-03:00:00}"
 
-# Filtre optionnel sur les ressources. Les clusters GPU de Nancy :
-#   grele     13 nœuds, 2x GTX 1080 Ti, 128 Go RAM   <- le plus dispo
-#   graffiti  12 nœuds, 4x RTX 2080 Ti, 128 Go RAM
-#   grue       5 nœuds, 4x Tesla T4,    128 Go RAM
-#   gruss      4 nœuds, 2x A40,         256 Go RAM
-#   gres       7 nœuds, 2x L40S,        512 Go RAM
-#   grat       1 nœud,  8x A100 40 Go,  512 Go RAM   <- très demandé
-# Vide = n'importe quel GPU (on attend moins). Sinon : "cluster = 'grele'".
-OAR_PROPERTIES=""
+# Le PyTorch installé ne supporte que les compute capabilities sm_75 et plus.
+# Sur un GPU plus ancien la première convolution meurt avec un message trompeur,
+# "RuntimeError: GET was unable to find an engine to execute this computation".
+# On filtre donc sur la capability, ce qui écarte automatiquement les mauvais
+# clusters sans avoir à les lister. Clusters GPU de Nancy :
+#   grele       GTX 1080 Ti      cc 6.1   INCOMPATIBLE (et c'est le plus dispo)
+#   gratouille  Tesla V100       cc 7.0   INCOMPATIBLE
+#   graffiti    RTX 2080 Ti      cc 7.5   ok
+#   grue        Tesla T4         cc 7.5   ok
+#   grat        A100 40 Go       cc 8.0   ok, très demandé
+#   grouille    A100 40 Go       cc 8.0   ok
+#   gruss       A40              cc 8.6   ok
+#   gres        L40S             cc 8.9   ok
+# La comparaison est textuelle : correcte tant que la majeure tient en un
+# chiffre (un futur GPU en cc 10.x serait écarté à tort, jamais accepté à tort).
+OAR_PROPERTIES="${OAR_PROPERTIES:-gpu_compute_capability >= '7.5'}"
 
 REMOTE_DIR="patchcore-inspection"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
