@@ -45,9 +45,6 @@ import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# CONFIG — surchargeable en ligne de commande.
-# --------------------------------------------------------------------------- #
 # Petite banque : le temps de recherche faiss est linéaire en taille de banque
 # et décide seul de la cadence (39 200 features -> 8 fps, 784 000 -> 0,6).
 # --bank_dir pour arbitrer autrement.
@@ -73,7 +70,6 @@ FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "y
 # Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault (cf.
 # patchcore/__init__.py). Coût négligeable : le temps est dans le backbone.
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
-# --------------------------------------------------------------------------- #
 
 
 def build_transform(fit_config):
