@@ -34,8 +34,8 @@ def load_bank(bank_dir, device, faiss_on_gpu=False, faiss_num_workers=4):
     if not os.path.exists(config_path):
         raise SystemExit(
             "No memory bank at {}. Build one first with "
-            "`python bin/fit_memory_bank_celeba.py`, or point BANK_DIR at an "
-            "existing bank.".format(bank_dir)
+            "`python bin/<dataset>/fit/memory_bank.py`, or point BANK_DIR at "
+            "an existing bank.".format(bank_dir)
         )
     with open(config_path) as fh:
         fit_config = json.load(fh)

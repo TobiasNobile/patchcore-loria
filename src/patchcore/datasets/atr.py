@@ -14,8 +14,8 @@ _HF_REPO = "mattmdjaga/human_parsing_dataset"
 # 6 Pants, 7 Dress, 8 Belt, 9 Left-shoe, 10 Right-shoe, 11 Face, 12 Left-leg,
 # 13 Right-leg, 14 Left-arm, 15 Right-arm, 16 Bag, 17 Scarf.
 _ANOMALY_LABEL = 1
-# En dessous de ce nombre de pixels "Hat" l'annotation est du bruit : on ne veut
-# pas exclure du train (ni compter comme anormale) une image pour trois pixels.
+# Sous ce seuil, l'annotation "Hat" est du bruit : ni exclue du train, ni
+# comptée comme anomalie.
 _MIN_ANOMALY_PIXELS = 64
 # Le repo n'expose qu'un split `train` : on découpe nous-mêmes, par seed.
 _TEST_FRACTION = 0.2
@@ -71,7 +71,7 @@ class AtrDataset(torch.utils.data.Dataset):
             ]
         )
         # NEAREST et pas de ToTensor : le masque porte des indices de classe,
-        # qu'une interpolation ou une normalisation rendraient ininterprétables.
+        # qu'interpoler ou normaliser rendrait ininterprétables.
         self.transform_mask = transforms.Compose(
             [
                 transforms.Resize(

@@ -1,6 +1,6 @@
 """Score le flux d'une webcam avec une banque mémoire PatchCore, en direct.
 
-Même moitié rapide de PatchCore que bin/infer_heatmap_celeba.py — chargement
+Même moitié rapide de PatchCore que bin/celeba/infer/heatmap.py — chargement
 d'une banque déjà fittée, aucun fit ici — mais la source est une caméra plutôt
 qu'un split de test. Le prétraitement (resize/imagesize) est relu du
 fit_config.json de la banque : une requête encodée autrement que la banque
@@ -11,8 +11,9 @@ donnerait des distances qui ne veulent rien dire.
     python bin/live_camera.py --source rtsp://…        # caméra IP
     python bin/live_camera.py --source clip.mp4 --loop # rejouer un fichier
 
-Touches : q/échap quitte, s écrit un instantané dans results/live/, espace met
-en pause l'inférence (l'aperçu continue).
+Touches : q/échap quitte, s écrit un instantané dans results/<dataset>/live/
+(le dataset est déduit de --bank_dir), espace met en pause l'inférence
+(l'aperçu continue).
 
 Attention au domaine de la banque : une banque CelebA est faite de visages
 recadrés serré. Une webcam plein cadre est hors distribution et scorera haut
@@ -26,11 +27,9 @@ import platform
 import time
 from collections import deque
 
-# Sur macOS, torch et faiss-cpu embarquent chacun leur libomp : la seconde à
-# s'initialiser fait abort le processus, et une recherche faiss multi-thread
-# segfault même avec KMP_DUPLICATE_LIB_OK. Tolérer le doublon ET forcer faiss
-# sur un seul thread (plus bas, via FAISS_NUM_WORKERS) est la seule combinaison
-# stable ici. Doit être posé avant l'import de torch.
+# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
+# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -49,38 +48,31 @@ LOGGER = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 # CONFIG — surchargeable en ligne de commande.
 # --------------------------------------------------------------------------- #
-# La petite banque par défaut, et non la meilleure : la recherche faiss est
-# exhaustive et linéaire en taille de banque, ce qui décide seul de la cadence.
-# Mesuré ici (CPU, faiss mono-thread) : backbone ~55 ms quelle que soit la
-# banque, puis 72 ms de recherche à 39 200 features contre 1 475 ms à 784 000,
-# soit 8 fps contre 0,6. Le README donne 0,78 d'AUROC à cette taille contre 0,80
-# à la plus grosse : deux points d'AUROC payés pour douze fois la cadence, le
-# bon change pour du direct. Passer --bank_dir pour arbitrer autrement.
+# Petite banque : le temps de recherche faiss est linéaire en taille de banque
+# et décide seul de la cadence (39 200 features -> 8 fps, 784 000 -> 0,6).
+# --bank_dir pour arbitrer autrement.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
 
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Échelle de couleur de la heatmap, en score de patch. Fixe (et non autoscale
-# par image) : en direct, une échelle qui bouge d'une frame à l'autre donne une
-# heatmap qui clignote et ne se compare pas à celle d'hier.
+# Échelle fixe, en score de patch. Un autoscale par image ferait clignoter la
+# heatmap et interdirait de comparer deux frames.
 HEATMAP_VMIN = 0.0
 HEATMAP_VMAX = 10.0
 HEATMAP_ALPHA = 0.5
 
-# Fenêtre de lissage du score affiché, en frames scorées. Le score PatchCore
-# d'une frame isolée est bruité (bougé, autofocus, exposition) ; la médiane
-# glissante enlève ce bruit sans traîner comme une moyenne.
+# Fenêtre de la médiane glissante, en frames scorées. Médiane et non moyenne :
+# absorbe les frames aberrantes (bougé, autofocus) sans traîner.
 SMOOTH_WINDOW = 5
 
-SNAPSHOT_DIR = "results/live"
+# Racine des instantanés ; le sous-dossier dataset est déduit de --bank_dir.
+# models/celeba/<tag> -> results/celeba/live/
+SNAPSHOT_ROOT = "results"
 
 FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
-# 1 thread par défaut sur macOS (cf. le commentaire libomp en tête). Une requête
-# d'une seule image contre un coreset ne perd de toute façon presque rien à être
-# mono-thread : le coût est dans le backbone, pas dans la recherche.
-FAISS_NUM_WORKERS = int(
-    os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4")
-)
+# Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault (cf.
+# patchcore/__init__.py). Coût négligeable : le temps est dans le backbone.
+FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 # --------------------------------------------------------------------------- #
 
 
@@ -130,7 +122,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused):
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     overlay = cv2.addWeighted(colored, HEATMAP_ALPHA, frame, 1 - HEATMAP_ALPHA, 0)
 
-    # Affichage confortable : la vignette fait 224 px de côté, illisible tel quel.
+    # La vignette fait 224 px de côté : illisible sans agrandissement.
     overlay = cv2.resize(overlay, (640, 640), interpolation=cv2.INTER_NEAREST)
 
     if threshold is None:
@@ -158,7 +150,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused):
 
 @click.command()
 @click.option("--bank_dir", default=BANK_DIR, show_default=True,
-              help="Dossier de banque écrit par un bin/fit_memory_bank_*.py.")
+              help="Dossier de banque écrit par un bin/<dataset>/fit/memory_bank.py.")
 @click.option("--source", default="0", show_default=True,
               help="Index de webcam (0, 1, …), chemin de fichier vidéo ou URL RTSP/HTTP.")
 @click.option("--stride", default=1, show_default=True,
@@ -169,7 +161,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused):
                    "Sert à approcher le cadrage serré d'une banque de visages.")
 @click.option("--threshold", type=float, default=None,
               help="Seuil de décision sur le score image. Sans seuil, seul le "
-                   "score brut est affiché (cf. bin/score_histogram_celeba.py "
+                   "score brut est affiché (cf. bin/celeba/infer/histogram.py "
                    "pour en calibrer un).")
 @click.option("--flip/--no-flip", default=True, show_default=True,
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
@@ -191,7 +183,14 @@ def main(bank_dir, source, stride, zoom, threshold, flip, loop):
             "autoriser la caméra pour le terminal dans Réglages Système > "
             "Confidentialité et sécurité > Caméra, puis relancer.".format(source)
         )
-    LOGGER.info("Source ouverte : %s. q pour quitter, s pour un instantané.", source)
+    # models/<dataset>/<tag> -> results/<dataset>/live
+    dataset = os.path.basename(os.path.dirname(os.path.normpath(bank_dir)))
+    snapshot_dir = os.path.join(SNAPSHOT_ROOT, dataset, "live")
+    LOGGER.info(
+        "Source ouverte : %s. q pour quitter, s pour un instantané dans %s/.",
+        source,
+        snapshot_dir,
+    )
 
     scores = deque(maxlen=SMOOTH_WINDOW)
     heatmap = np.zeros((fit_config["imagesize"], fit_config["imagesize"]), np.float32)
@@ -226,7 +225,7 @@ def main(bank_dir, source, stride, zoom, threshold, flip, loop):
                 heatmap = np.asarray(batch_masks[0])
 
             now = time.perf_counter()
-            # Lissage exponentiel du fps, sinon le chiffre affiché est illisible.
+            # Lissage exponentiel : le fps brut saute trop pour être lu.
             fps = 0.9 * fps + 0.1 / max(now - last_tick, 1e-6)
             last_tick = now
             frame_index += 1
@@ -240,9 +239,9 @@ def main(bank_dir, source, stride, zoom, threshold, flip, loop):
             if key == ord(" "):
                 paused = not paused
             if key == ord("s"):
-                os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+                os.makedirs(snapshot_dir, exist_ok=True)
                 path = os.path.join(
-                    SNAPSHOT_DIR, "live_{}.png".format(time.strftime("%Y%m%d-%H%M%S"))
+                    snapshot_dir, "live_{}.png".format(time.strftime("%Y%m%d-%H%M%S"))
                 )
                 cv2.imwrite(path, overlay)
                 LOGGER.info("Instantané écrit dans %s", path)

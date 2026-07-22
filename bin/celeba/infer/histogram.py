@@ -1,20 +1,27 @@
 """Compare les scores d'anomalie des images NO-HAT et HAT du split TEST.
 
-Charge une banque mémoire construite par bin/fit_memory_bank_celeba.py — aucun
+Charge une banque mémoire construite par bin/celeba/fit/memory_bank.py — aucun
 fit ici. Les hyperparamètres du fit (backbone, sampler, percentage, train_subset,
 resize/imagesize, seed) sont relus dans le fit_config.json de la banque : une
 image encodée autrement que la banque contre laquelle on la compare donnerait des
 distances qui ne veulent rien dire, et le ferait silencieusement.
 
-    python bin/fit_memory_bank_celeba.py                     # une fois, hors ligne
-    python bin/score_histogram_celeba.py                     # histogramme + stats
-    python bin/score_histogram_celeba.py --n_per_class 200   # échantillon plus petit
+    python bin/celeba/fit/memory_bank.py                     # une fois, hors ligne
+    python bin/celeba/infer/histogram.py                     # histogramme + stats
+    python bin/celeba/infer/histogram.py --n_per_class 200   # échantillon plus petit
 """
 
 import json
 import logging
 import os
+import platform
 import time
+
+# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
+# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import click
 import matplotlib.pyplot as plt
@@ -37,20 +44,17 @@ COLOR_ANOMALY = "#E8A33D"
 # --------------------------------------------------------------------------- #
 # CONFIG — édite ici, puis lance le script.
 # --------------------------------------------------------------------------- #
-# Dossier écrit par bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
-# BANK_DIR et OUTPUT_PATH sont surchargeables par env var (HIST_BANK_DIR /
-# HIST_OUTPUT_PATH) pour scorer plusieurs banques dans un même job sans éditer
-# ce fichier ; non définies, les valeurs ci-dessous s'appliquent.
+# Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
+# BANK_DIR et OUTPUT_PATH surchargeables par HIST_BANK_DIR / HIST_OUTPUT_PATH,
+# pour scorer plusieurs banques dans un même job.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 
-OUTPUT_PATH = "results/histograms/hist_celeba.png"
+OUTPUT_PATH = "results/celeba/histograms/hist_celeba.png"
 
 BANK_DIR = os.environ.get("HIST_BANK_DIR", BANK_DIR)
 OUTPUT_PATH = os.environ.get("HIST_OUTPUT_PATH", OUTPUT_PATH)
 
-# Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. Plafonné au
-# nombre d'images disponibles par classe dans le test (la classe hat n'a qu'~839
-# images).
+# Échantillon PAR classe, effectifs égaux. Plafonné au disponible (~839 hat).
 N_PER_CLASS_DEFAULT = 1000
 
 GPU = [0]  # [] force le CPU. Retombe sur CPU sur une machine sans CUDA de toute façon.
@@ -58,15 +62,14 @@ BINS = 50
 TEST_BATCH_SIZE = 8
 NUM_WORKERS = 8
 
-# La recherche FAISS domine le temps de scoring et croît avec la taille de banque.
-# Sur CPU elle est ~14 s par batch de 8 pour 78k vecteurs, ce qui rend un balayage
-# complet impraticable -> HIST_FAISS_GPU=1 la bascule sur GPU. Attention : l'index
-# est alors entièrement en mémoire GPU (4 Ko par vecteur).
+# La recherche FAISS domine le scoring et croît avec la banque (~14 s par batch
+# de 8 pour 78k vecteurs sur CPU). HIST_FAISS_GPU=1 la bascule sur GPU, index
+# alors entièrement en mémoire GPU (4 Ko par vecteur).
 FAISS_ON_GPU = os.environ.get("HIST_FAISS_GPU", "").lower() in ("1", "true", "yes")
-FAISS_NUM_WORKERS = int(os.environ.get("HIST_FAISS_THREADS", "4"))
+FAISS_NUM_WORKERS = int(os.environ.get("HIST_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
-# Une expérience MLflow par tâche : les histogrammes séparés des heatmaps et des
-# benchmarks. run_name encode la config, l'origine est taguée par patchcore.tracking.
+# Une expérience MLflow par tâche. run_name encode la config, l'origine est
+# taguée par patchcore.tracking.
 LOG_PROJECT = "celeba-histograms"
 # --------------------------------------------------------------------------- #
 
@@ -146,9 +149,8 @@ def main(n_per_class):
         BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
     )
 
-    # Nombre de plus proches voisins : paramètre de SCORING (pas de construction du
-    # coreset, la banque est identique), donc surchargeable sans re-fitter via
-    # HIST_NUM_NN. imagelevel_nn a capturé l'ancien k dans sa closure -> on rebinde.
+    # k est un paramètre de scoring, pas de construction : surchargeable sans
+    # re-fitter. imagelevel_nn a capturé l'ancien k dans sa closure -> rebind.
     num_nn_used = int(fit_config.get("anomaly_scorer_num_nn", 1))
     _env_num_nn = os.environ.get("HIST_NUM_NN")
     if _env_num_nn:
@@ -159,8 +161,8 @@ def main(n_per_class):
             lambda q, s=scorer, k=num_nn_used: s.nn_method.run(k, q)
         )
         LOGGER.info("num_nn surchargé à %d (HIST_NUM_NN).", num_nn_used)
-    # Le seed de la banque pilote aussi le sous-échantillonnage équilibré du
-    # split TEST : on reste sur les mêmes images d'une analyse à l'autre.
+    # Le seed de la banque pilote aussi l'équilibrage du split TEST : mêmes
+    # images d'une analyse à l'autre.
     seed = fit_config["seed"]
     patchcore.utils.fix_seeds(seed)
 
@@ -171,9 +173,8 @@ def main(n_per_class):
         seed=seed,
     )
 
-    # On connaît les labels (hat/no-hat) SANS inférence -> on tire n index par
-    # classe en amont et on ne score QUE ces images (pas de compute gaspillé sur
-    # des images qu'on jetterait ensuite). Effectifs égaux = min(demandé, dispo).
+    # Labels connus sans inférence -> n index tirés par classe en amont, on ne
+    # score que ceux-là. Effectifs égaux = min(demandé, dispo).
     test_labels = np.asarray(test_dataset.labels, dtype=int)
     normal_idx = np.where(test_labels == 0)[0]
     anomaly_idx = np.where(test_labels == 1)[0]
@@ -219,8 +220,7 @@ def main(n_per_class):
         torch.cuda.synchronize(device)
     scoring_seconds = time.perf_counter() - t0
 
-    # Les images scorées sont déjà l'échantillon équilibré (n par classe) :
-    # il suffit de séparer par label retourné, plus aucun tirage à faire ici.
+    # Échantillon déjà équilibré : séparer par label suffit, plus de tirage.
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels_gt, dtype=int)
     normal_scores = scores[labels == 0]
@@ -276,10 +276,9 @@ def main(n_per_class):
     plt.close()
     LOGGER.info("Saved histogram to %s", OUTPUT_PATH)
 
-    # Métriques : sidecar JSON GARANTI (à côté du PNG) + logging MLflow
-    # BEST-EFFORT. Le file store MLflow sur NFS lève un "Stale file handle"
-    # quand des tâches parallèles se disputent le verrou -> on ne laisse jamais
-    # ça détruire un résultat déjà calculé (figure + JSON écrits avant).
+    # Sidecar JSON garanti, MLflow best-effort : le file store sur NFS lève un
+    # "Stale file handle" quand des tâches parallèles se disputent le verrou, et
+    # ne doit pas détruire un résultat déjà écrit.
     metrics = {
         "jaccard": jac["jaccard"],
         "jaccard_intersection": jac["intersection"],

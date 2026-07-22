@@ -14,7 +14,7 @@ _For questions & feedback, please reach out to karsten.rh1@gmail.com!_
 
 ## Quick Guide
 
-First, clone this repository and set the `PYTHONPATH` environment variable with `env PYTHONPATH=src python bin/run_patchcore.py`.
+First, clone this repository and set the `PYTHONPATH` environment variable with `env PYTHONPATH=src python bin/mvtec/run_patchcore.py`.
 To train PatchCore on MVTec AD (as described below), run
 
 ```
@@ -23,7 +23,7 @@ datapath=/path_to_mvtec_folder/mvtec datasets=('bottle' 'cable' 'capsule' 'carpe
 dataset_flags=($(for dataset in "${datasets[@]}"; do echo '-d '$dataset; done))
 
 
-python bin/run_patchcore.py --gpu 0 --seed 0 --save_patchcore_model \
+python bin/mvtec/run_patchcore.py --gpu 0 --seed 0 --save_patchcore_model \
 --log_group IM224_WR50_L2-3_P01_D1024-1024_PS-3_AN-1_S0 --log_online --log_project MVTecAD_Results results \
 patch_core -b wideresnet50 -le layer2 -le layer3 --faiss_on_gpu \
 --pretrain_embed_dimension 1024  --target_embed_dimension 1024 --anomaly_scorer_num_nn 1 --patchsize 3 \
@@ -46,7 +46,7 @@ datasets=('bottle'  'cable'  'capsule'  'carpet'  'grid'  'hazelnut' 'leather'  
 dataset_flags=($(for dataset in "${datasets[@]}"; do echo '-d '$dataset; done))
 model_flags=($(for dataset in "${datasets[@]}"; do echo '-p '$loadpath'/'$modelfolder'/models/mvtec_'$dataset; done))
 
-python bin/load_and_evaluate_patchcore.py --gpu 0 --seed 0 $savefolder \
+python bin/mvtec/load_and_evaluate.py --gpu 0 --seed 0 $savefolder \
 patch_core_loader "${model_flags[@]}" --faiss_on_gpu \
 dataset --resize 366 --imagesize 320 "${dataset_flags[@]}" mvtec $datapath
 ```
@@ -92,11 +92,11 @@ PatchCore extracts a (coreset-subsampled) memory of pretrained, locally aggregat
 
 ![patchcore_architecture](images/architecture.png)
 
-To do so, we have provided `bin/run_patchcore.py`, which uses `click` to manage and aggregate input
+To do so, we have provided `bin/mvtec/run_patchcore.py`, which uses `click` to manage and aggregate input
 arguments. This looks something like
 
 ```shell
-python bin/run_patchcore.py \
+python bin/mvtec/run_patchcore.py \
 --gpu <gpu_id> --seed <seed> # Set GPU-id & reproducibility seed.
 --save_patchcore_model # If set, saves the patchcore model(s).
 --log_online # If set, logs results to a Weights & Biases account.
@@ -121,7 +121,7 @@ repository changes (& hardware differences), results may deviate slightly from t
 paper, but should generally be very close or even better. As mentioned previously, for re-use and
 replicability we have also provided several pretrained PatchCore models hosted at __add link__ -
 download the folder, extract, and pass the model of your choice to
-`bin/load_and_evaluate_patchcore.py` which showcases an exemplary evaluation process.
+`bin/mvtec/load_and_evaluate.py` which showcases an exemplary evaluation process.
 
 During (after) training, the following information will be stored:
 
@@ -150,7 +150,7 @@ ordering, denote the layers to extract with `-le idx.<layer_name>`. An example w
 backbones would look something like
 
 ```shell
-python bin/run_patchcore.py --gpu <gpu_id> --seed <seed> --save_patchcore_model --log_group <log_name> --log_online --log_project <log_project> results \
+python bin/mvtec/run_patchcore.py --gpu <gpu_id> --seed <seed> --save_patchcore_model --log_group <log_name> --log_online --log_project <log_project> results \
 
 patch_core -b wideresnet101 -b resnext101 -b densenet201 -le 0.layer2 -le 0.layer3 -le 1.layer2 -le 1.layer3 -le 2.features.denseblock2 -le 2.features.denseblock3 --faiss_on_gpu \
 
@@ -165,7 +165,7 @@ When using `--save_patchcore_model`, in the case of ensembles, a respective ense
 To evaluate a/our pretrained PatchCore model(s), run
 
 ```shell
-python bin/load_and_evaluate_patchcore.py --gpu <gpu_id> --seed <seed> $savefolder \
+python bin/mvtec/load_and_evaluate.py --gpu <gpu_id> --seed <seed> $savefolder \
 patch_core_loader "${model_flags[@]}" --faiss_on_gpu \
 dataset --resize 366 --imagesize 320 "${dataset_flags[@]}" mvtec $datapath
 ```
@@ -204,6 +204,37 @@ If you use the code in this repository, please cite
       primaryClass={cs.CV}
 }
 ```
+
+## Organisation des scripts et des sorties
+
+Deux axes, dans cet ordre : le dataset, puis la phase. Le fit est la moitié
+coûteuse et hors-ligne de PatchCore (extraction des features + coreset) et
+n'écrit que des banques mémoire ; l'inférence recharge une banque et n'écrit que
+des figures et des mesures. Les séparer évite qu'un script de scoring déclenche
+un fit par inadvertance, et rend visible ce qui est cher à reproduire.
+
+```
+bin/
+  celeba/
+    fit/memory_bank.py      # écrit models/celeba/<tag>/
+    infer/heatmap.py        # -> results/celeba/heatmaps/
+    infer/histogram.py      # -> results/celeba/histograms/
+    infer/benchmark.py      # -> results/celeba/benchmarks/
+  atr/
+    fit/                    # à écrire (cf. src/patchcore/datasets/atr.py)
+  mvtec/
+    run_patchcore.py        # amont : fit + éval en un seul script
+    load_and_evaluate.py
+  live_camera.py            # agnostique : le dataset vient de --bank_dir
+
+models/<dataset>/<tag>/     # banques mémoire (gitignoré pour celeba)
+results/<dataset>/<sortie>/ # figures et mesures (gitignoré en entier)
+results/_archive/           # sorties d'anciens scripts, conservées telles quelles
+```
+
+`live_camera.py` est le seul script agnostique du dataset : il vaut ce que vaut
+la banque qu'on lui passe, et déduit de `--bank_dir` où écrire ses instantanés
+(`models/celeba/…` -> `results/celeba/live/`).
 
 ## CelebA — résumé des résultats
 

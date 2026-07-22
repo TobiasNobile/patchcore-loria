@@ -6,11 +6,11 @@
 #
 # Usage:
 #   ./grid5000_run.sh                                       # lance le script par défaut
-#   ./grid5000_run.sh bin/fit_memory_bank_celeba.py         # construit la banque mémoire
-#   ./grid5000_run.sh bin/infer_heatmap_celeba.py --image_index 900
-#   ./grid5000_run.sh bin/score_histogram_celeba.py --n_per_class 200
+#   ./grid5000_run.sh bin/celeba/fit/memory_bank.py         # construit la banque mémoire
+#   ./grid5000_run.sh bin/celeba/infer/heatmap.py --image_index 900
+#   ./grid5000_run.sh bin/celeba/infer/histogram.py --n_per_class 200
 #
-#   DETACH=true ./grid5000_run.sh bin/fit_memory_bank_celeba.py
+#   DETACH=true ./grid5000_run.sh bin/celeba/fit/memory_bank.py
 #       Soumet le job et rend la main IMMÉDIATEMENT (rien à garder ouvert : ni
 #       terminal, ni connexion, ni ordinateur allumé). Pour un run long/nocturne.
 #   ./grid5000_run.sh --fetch
@@ -41,6 +41,16 @@
 # Le fit n'a PAS besoin de faiss-gpu (le coreset tourne sur PyTorch/CUDA).
 # `uv pip install faiss-gpu-cu12` ne sert qu'à accélérer l'inférence, plus tard.
 #
+# Clusters GPU de Nancy, par compute capability (OAR_PROPERTIES filtre >= 7.5) :
+#   grele       GTX 1080 Ti      cc 6.1   INCOMPATIBLE (et c'est le plus dispo)
+#   gratouille  Tesla V100       cc 7.0   INCOMPATIBLE
+#   graffiti    RTX 2080 Ti      cc 7.5   ok
+#   grue        Tesla T4         cc 7.5   ok
+#   grat        A100 40 Go       cc 8.0   ok, très demandé
+#   grouille    A100 40 Go       cc 8.0   ok
+#   gruss       A40              cc 8.6   ok
+#   gres        L40S             cc 8.9   ok
+#
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────
@@ -54,27 +64,14 @@ OAR_QUEUE="abaca"
 OAR_GPU=1
 OAR_WALLTIME="${OAR_WALLTIME:-03:00:00}"
 
-# Ressources demandées. Par défaut un seul GPU, ce qui n'octroie qu'une fraction
-# de la RAM du nœud sur les clusters multi-GPU. Passer OAR_RESOURCES="host=1"
-# réserve le nœud entier (toute la RAM), nécessaire quand le nuage de features
-# est gros : un fit à ts=20000 demande ~60 Go rien que pour les features.
+# Un seul GPU par défaut = une fraction de la RAM sur les nœuds multi-GPU.
+# OAR_RESOURCES="host=1" réserve le nœud entier, nécessaire au-delà de
+# ts=20000 (~60 Go rien que pour le nuage de features).
 OAR_RESOURCES="${OAR_RESOURCES:-gpu=${OAR_GPU}}"
 
-# Le PyTorch installé ne supporte que les compute capabilities sm_75 et plus.
-# Sur un GPU plus ancien la première convolution meurt avec un message trompeur,
-# "RuntimeError: GET was unable to find an engine to execute this computation".
-# On filtre donc sur la capability, ce qui écarte automatiquement les mauvais
-# clusters sans avoir à les lister. Clusters GPU de Nancy :
-#   grele       GTX 1080 Ti      cc 6.1   INCOMPATIBLE (et c'est le plus dispo)
-#   gratouille  Tesla V100       cc 7.0   INCOMPATIBLE
-#   graffiti    RTX 2080 Ti      cc 7.5   ok
-#   grue        Tesla T4         cc 7.5   ok
-#   grat        A100 40 Go       cc 8.0   ok, très demandé
-#   grouille    A100 40 Go       cc 8.0   ok
-#   gruss       A40              cc 8.6   ok
-#   gres        L40S             cc 8.9   ok
-# La comparaison est textuelle : correcte tant que la majeure tient en un
-# chiffre (un futur GPU en cc 10.x serait écarté à tort, jamais accepté à tort).
+# PyTorch exige sm_75+ ; en dessous, la 1re convolution meurt sur un message
+# trompeur ("GET was unable to find an engine"). Comparaison textuelle : sûre
+# tant que la majeure tient en un chiffre (cc 10.x serait écarté à tort).
 OAR_PROPERTIES="${OAR_PROPERTIES:-gpu_compute_capability >= '7.5'}"
 
 REMOTE_DIR="patchcore-inspection"
@@ -88,10 +85,8 @@ IMPORT_ORIGIN="g5k"
 LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
 [[ -x "${LOCAL_PYTHON}" ]] || LOCAL_PYTHON="python"
 
-# Les banques mémoire pèsent lourd (~4 Ko par vecteur : 640 Mo pour une banque
-# à 10% sur 2000 images, 64 Mo à 1%). Elles restent donc côté serveur par
-# défaut — l'inférence tourne là-bas de toute façon. Passe à true pour les
-# rapatrier et faire des heatmaps en local.
+# Les banques pèsent ~4 Ko par vecteur (640 Mo à 10% sur 2000 images) et
+# restent côté serveur, où tourne l'inférence. true = les rapatrier.
 FETCH_BANKS="${FETCH_BANKS:-false}"
 
 # true = soumet le job et rend la main tout de suite, sans suivre la sortie.
@@ -105,15 +100,14 @@ REMOTE_ENV="${REMOTE_ENV:-}"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste des
 # arguments est transmis tel quel au script Python.
-SCRIPT="${1:-bin/infer_heatmap_celeba.py}"
+SCRIPT="${1:-bin/celeba/infer/heatmap.py}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
 SCRIPT_ARGS=("$@")
 
-# Mêmes exclusions que remote_run.sh : gros fichiers, ou spécifiques à la
-# machine locale. `models` est exclu dans les deux sens : les banques se
-# construisent et se consomment sur le serveur.
+# Mêmes exclusions que remote_run.sh. `models` exclu dans les deux sens : les
+# banques se construisent et se consomment sur le serveur.
 EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
           --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
           --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
@@ -194,10 +188,9 @@ fi
 echo "Réservation d'un nœud GPU (queue ${OAR_QUEUE}, gpu=${OAR_GPU}, walltime=${OAR_WALLTIME})..."
 echo "    puis exécution de ${SCRIPT}${QUOTED_ARGS}"
 
-# OAR n'a pas d'équivalent bloquant de `srun` : `oarsub -I` ouvre un shell
-# interactif et n'accepte pas de commande. On soumet donc un job passif, puis on
-# suit sa sortie jusqu'à ce qu'il quitte les états Waiting/Launching/Running —
-# ce qui donne le même confort qu'un run bloquant, sortie en direct comprise.
+# Pas d'équivalent bloquant de `srun` sous OAR (`oarsub -I` n'accepte pas de
+# commande) : job passif, puis suivi de sa sortie jusqu'à ce qu'il quitte
+# Waiting/Launching/Running.
 # shellcheck disable=SC2029  # on veut bien l'expansion locale des variables
 "${SSH_FRONTEND[@]}" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
@@ -205,9 +198,8 @@ cd "${REMOTE_DIR}"
 
 JOB_OUT="oar_job.out"
 
-# Le job est écrit dans un script à part plutôt que passé en ligne à oarsub :
-# une valeur de REMOTE_ENV contenant des guillemets (SIZES="1000 2000") casserait
-# l'imbrication des quotes d'un oarsub "bash -c '...'" et découperait l'argument.
+# Job écrit dans un script à part : un REMOTE_ENV contenant des guillemets
+# (SIZES="1000 2000") casserait l'imbrication des quotes d'un oarsub bash -c.
 LAUNCH=".oar_launch.sh"
 cat > "\${LAUNCH}" <<'LAUNCHER'
 #!/usr/bin/env bash

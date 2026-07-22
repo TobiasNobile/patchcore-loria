@@ -5,8 +5,8 @@
 #
 # Usage:
 #   ./remote_run.sh                                     # lance le script par défaut
-#   ./remote_run.sh bin/fit_memory_bank_celeba.py       # construit la banque mémoire
-#   ./remote_run.sh bin/infer_heatmap_celeba.py --image_index 900
+#   ./remote_run.sh bin/celeba/fit/memory_bank.py       # construit la banque mémoire
+#   ./remote_run.sh bin/celeba/infer/heatmap.py --image_index 900
 #                                                       # arguments transmis au script Python
 #
 set -euo pipefail
@@ -17,36 +17,31 @@ REMOTE_HOST="dce.metz.centralesupelec.fr"
 REMOTE_DIR="~/patchcore-inspection"
 LOCAL_DIR="$HOME/dev/telecom/stage_1a/patchcore-inspection"
 
-# dce.metz.centralesupelec.fr n'est que la passerelle SSH (login node) : elle
-# n'a pas de GPU. Les GPU ne sont accessibles que via une partition SLURM
-# (cf. https://dce.pages.centralesupelec.fr), donc on passe par `srun` au lieu
-# d'exécuter python directement sur la passerelle. gpu_inter est dispo H24
-# mais plafonnée à 2h de walltime et 1 job à la fois — largement suffisant
-# pour un run d'inspection ; augmenter SLURM_TIME si besoin pour un run plus long.
+# La passerelle SSH n'a pas de GPU : ils passent par une partition SLURM, d'où
+# `srun` (cf. https://dce.pages.centralesupelec.fr). gpu_inter est dispo H24,
+# plafonnée à 2h et 1 job — monter SLURM_TIME pour un run plus long.
 SLURM_PARTITION="gpu_inter"
 SLURM_TIME="02:00:00"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste
 # des arguments est transmis tel quel au script Python.
-SCRIPT="${1:-bin/infer_heatmap_celeba.py}"
+SCRIPT="${1:-bin/celeba/infer/heatmap.py}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
 SCRIPT_ARGS=("$@")
 
-# Dossiers/fichiers à ne PAS envoyer (gros fichiers, déjà présents côté serveur,
-# ou spécifiques à la machine locale). mlruns.db est exclu car il contient des
-# artifact_location absolus propres à cette machine (écraser la base distante
-# avec ferait pointer MLflow vers des chemins locaux inexistants sur le serveur).
+# Exclus de l'envoi : gros fichiers, ou spécifiques à cette machine. mlruns.db
+# porte des artifact_location absolus qui pointeraient dans le vide côté
+# serveur.
 EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
           --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
           --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
           --exclude '.mlflow_import' --exclude '__pycache__' --exclude '.pytest_cache')
 
-# On ne garde PLUS de base MLflow parallèle. La base distante et ses artefacts
-# sont rapatriés dans un dossier TEMPORAIRE, puis leurs runs sont IMPORTÉS dans
-# la base locale unique (mlruns.db) via tools/mlflow_import.py — origine "metz".
-# Résultat : un seul mlruns.db à ouvrir, plus de mlruns_remote.db.
+# Pas de base MLflow parallèle : la base distante atterrit dans un dossier
+# temporaire, puis ses runs sont importés dans mlruns.db par
+# tools/mlflow_import.py, tagués origine "metz".
 IMPORT_TMP=".mlflow_import/metz"
 IMPORT_ORIGIN="metz"
 

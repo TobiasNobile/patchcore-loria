@@ -1,16 +1,23 @@
 """Superpose la heatmap d'anomalie PatchCore sur des images test CelebA.
 
-Charge une banque construite par bin/fit_memory_bank_celeba.py — pas de fit ni de
+Charge une banque construite par bin/celeba/fit/memory_bank.py — pas de fit ni de
 coreset, c'est la moitié rapide de PatchCore. Le prétraitement et le seed sont
 relus du fit_config.json de la banque.
 
-    python bin/infer_heatmap_celeba.py                      # une image (défaut)
-    python bin/infer_heatmap_celeba.py --image_index 900    # une autre image
-    python bin/infer_heatmap_celeba.py --n_per_class 30     # 30 hat + 30 no-hat
+    python bin/celeba/infer/heatmap.py                      # une image (défaut)
+    python bin/celeba/infer/heatmap.py --image_index 900    # une autre image
+    python bin/celeba/infer/heatmap.py --n_per_class 30     # 30 hat + 30 no-hat
 """
 import logging
 import os
+import platform
 import time
+
+# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
+# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import click
 import matplotlib.pyplot as plt
@@ -26,7 +33,7 @@ LOGGER = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 # CONFIG — à éditer avant de lancer.
 # --------------------------------------------------------------------------- #
-# Dossier écrit par bin/fit_memory_bank_celeba.py (MODELS_DIR/<tag>).
+# Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
 
 # Mode image seule : index dans le split TEST équilibré (839 hat + 839 no-hat).
@@ -35,20 +42,19 @@ IMAGE_INDEX_DEFAULT = 0
 
 # Sorties ici. En mode image seule, {idx} est remplacé. En mode --n_per_class,
 # un sous-dossier par banque est créé, fichiers <hat|good>_idx<N>.png.
-OUTPUT_PATH = "results/heatmaps/overlay_idx{idx}.png"
+OUTPUT_PATH = "results/celeba/heatmaps/overlay_idx{idx}.png"
 
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Échelle de couleur. None = autoscale par image (montre la structure mais
-# incomparable entre images). Fixer les deux (p.ex. 0 et 10) pour comparer sur
-# une échelle commune, utile pour un lot d'images regardées côte à côte.
+# None = autoscale par image : montre la structure, incomparable entre images.
+# Deux bornes fixes (p.ex. 0 et 10) = échelle commune pour un lot d'images.
 HEATMAP_VMIN = 0
 HEATMAP_VMAX = 10
 HEATMAP_ALPHA = 0.5
 
 BATCH_SIZE = 8
 FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
-FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "4"))
+FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 # --------------------------------------------------------------------------- #
 
 
@@ -107,8 +113,7 @@ def main(image_index, n_per_class):
     mean = np.array(test_dataset.transform_mean).reshape(-1, 1, 1)
     std = np.array(test_dataset.transform_std).reshape(-1, 1, 1)
 
-    # Choix des images à superposer. Les labels sont connus sans inférence, donc
-    # le tirage hat/no-hat se fait en amont (comme pour l'histogramme).
+    # Labels connus sans inférence : le tirage hat/no-hat se fait en amont.
     if n_per_class > 0:
         labels = np.asarray(test_dataset.labels, dtype=int)
         normal_idx = np.where(labels == 0)[0]
@@ -126,7 +131,7 @@ def main(image_index, n_per_class):
             rng.choice(anomaly_idx, n, replace=False),
         ]).tolist()
         out_dir = os.path.join(
-            os.path.dirname(OUTPUT_PATH) or "results/heatmaps",
+            os.path.dirname(OUTPUT_PATH) or "results/celeba/heatmaps",
             "ts{}_p{}".format(fit_config["train_subset"], fit_config["coreset_pct"]),
         )
     else:

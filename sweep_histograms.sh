@@ -7,7 +7,7 @@
 #     coreset : 10% et 5%                                    (0.1 et 0.05)
 #
 # soit 6 x 2 x 2 = 24 histogrammes. Chaque run écrit un PNG + un sidecar JSON avec
-# l'indice de Jaccard (cf. histogram_jaccard dans score_histogram_celeba.py).
+# l'indice de Jaccard (cf. histogram_jaccard dans infer/histogram.py).
 #
 # Le nombre de voisins n'intervient qu'au scoring, pas dans le coreset : la banque
 # est identique pour nn=1 et nn=3, donc on ne fitte que 12 banques (une par taille
@@ -33,7 +33,7 @@ if [[ -z "${PYTHON:-}" && -f ".venv/bin/activate" ]]; then
 fi
 PYTHON="${PYTHON:-python}"
 
-# Doit correspondre aux constantes du tag dans bin/fit_memory_bank_celeba.py :
+# Doit correspondre aux constantes du tag dans bin/celeba/fit/memory_bank.py :
 # build_tag() = "{backbone}_{sampler}_p{pct:g}_ts{subset}_s{seed}".
 BACKBONE="wideresnet50"
 SAMPLER="approx_greedy_coreset"
@@ -50,7 +50,7 @@ KEEP_BANKS="${KEEP_BANKS:-true}"
 # banques vivant sur le disque du nœud disparaissent avec le job, donc sans ça
 # un run interrompu recommencerait tout. SKIP_EXISTING=false pour tout refaire.
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
-OUT_DIR="${OUT_DIR:-results/histograms/sweep}"
+OUT_DIR="${OUT_DIR:-results/celeba/histograms/sweep}"
 
 # Surchargeables par env var pour un test rapide, ex : SIZES="1000 2000".
 read -ra SIZES <<< "${SIZES:-1000 2000 5000 10000 20000 50000}"
@@ -58,10 +58,8 @@ read -ra NNS   <<< "${NNS:-3 1}"
 read -ra PCTS  <<< "${PCTS:-0.1 0.05}"
 N_PER_CLASS="${N_PER_CLASS:-1000}"
 
-# Pourcentages propres à une taille, ex : PCTS_50000="0.02 0.01". Le coreset est
-# quadratique en nombre de features (chaque itération balaie tout le nuage), donc
-# les grandes tailles sont hors de portée aux pourcentages habituels : ts=50000 à
-# 10 % demanderait ~46 h de fit, contre ~9 h à 2 %.
+# Pourcentages propres à une taille (ex PCTS_50000="0.02 0.01"). Le coreset est
+# quadratique : ts=50000 demande ~46 h de fit à 10 %, contre ~9 h à 2 %.
 pcts_for() {  # $1 = train_subset
   local var="PCTS_$1"
   if [[ -n "${!var:-}" ]]; then printf '%s' "${!var}"; else printf '%s' "${PCTS[*]}"; fi
@@ -109,7 +107,7 @@ for size in "${SIZES[@]}"; do
     else
       echo "Fit banque ts=${size} coreset=${pct} -> ${bank_dir}"
       FIT_TRAIN_SUBSET="${size}" FIT_CORESET_PCT="${pct}" FIT_MODELS_DIR="${MODELS_DIR}" \
-        "${PYTHON}" bin/fit_memory_bank_celeba.py
+        "${PYTHON}" bin/celeba/fit/memory_bank.py
     fi
 
     # Score : nn=3 puis nn=1 sur la même banque (pas de re-fit).
@@ -117,7 +115,7 @@ for size in "${SIZES[@]}"; do
       out="${OUT_DIR}/hist_ts${size}_p${pct}_nn${nn}.png"
       echo "  Histogramme ts=${size} coreset=${pct} nn=${nn} -> ${out}"
       HIST_BANK_DIR="${bank_dir}" HIST_OUTPUT_PATH="${out}" HIST_NUM_NN="${nn}" \
-        "${PYTHON}" bin/score_histogram_celeba.py --n_per_class "${N_PER_CLASS}"
+        "${PYTHON}" bin/celeba/infer/histogram.py --n_per_class "${N_PER_CLASS}"
     done
 
     if [[ "${KEEP_BANKS}" != "true" ]]; then

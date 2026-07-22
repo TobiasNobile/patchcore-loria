@@ -4,8 +4,8 @@ Charge une banque et pousse N images test dans l'inférence, en reportant
 images/seconde et ms/image pour plusieurs tailles de batch. Pas de fit, pas de
 rendu PNG : on ne mesure que la moitié de PatchCore qui tournerait en temps réel.
 
-    python bin/benchmark_inference_celeba.py
-    BENCH_BANK_DIR=models/celeba/..._ts250_s0 python bin/benchmark_inference_celeba.py
+    python bin/celeba/infer/benchmark.py
+    BENCH_BANK_DIR=models/celeba/..._ts250_s0 python bin/celeba/infer/benchmark.py
 
 Chronométré, par image : tensor -> backbone -> recherche FAISS -> heatmap 224x224.
 
@@ -24,7 +24,14 @@ image sur cent). Un JSON par banque, pour tracer le débit vs la taille de banqu
 import json
 import logging
 import os
+import platform
 import time
+
+# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
+# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import torch
@@ -49,10 +56,10 @@ BATCH_SIZES = [1, 8, 32]
 # Batches écartés avant de lancer le chrono (ils paient le warm-up CUDA/cuDNN).
 WARMUP_BATCHES = 3
 
-OUTPUT_DIR = os.environ.get("BENCH_OUTPUT_DIR", "results/benchmarks")
+OUTPUT_DIR = os.environ.get("BENCH_OUTPUT_DIR", "results/celeba/benchmarks")
 
-# GPU/BENCH_DEVICE décide où tourne le backbone (phase embed), BENCH_FAISS_GPU où
-# tourne la recherche. "Full GPU" nécessite les deux.
+# GPU/BENCH_DEVICE place le backbone, BENCH_FAISS_GPU place la recherche.
+# "Full GPU" nécessite les deux.
 
 GPU = [0]  # [] force le CPU.
 if os.environ.get("BENCH_DEVICE", "").lower() == "cpu":
@@ -62,7 +69,7 @@ FAISS_ON_GPU = False
 if os.environ.get("BENCH_FAISS_GPU", "").lower() in ("1", "true", "yes"):
     FAISS_ON_GPU = True
 
-FAISS_NUM_WORKERS = 4
+FAISS_NUM_WORKERS = 1 if platform.system() == "Darwin" else 4
 
 def preload_images(dataset, indices):
     """Décode + transforme chaque image une fois, en amont, en un tensor CPU.
@@ -156,10 +163,9 @@ def measure(patchcore_instance, images, batch_size, device):
     times = embed + search + post
     total_seconds = float(np.sum(times))
 
-    # Temps par batch divisé par sa taille. Seul batch=1 fait "une mesure = une
-    # image", ce qui rend les percentiles ci-dessous de vraies latences ; au-delà
-    # chaque valeur est une moyenne intra-batch (la queue est lissée). Lire les
-    # percentiles à batch=1, le débit à batch 8/32.
+    # Temps par batch / taille. Seul batch=1 donne une mesure par image, donc
+    # de vraies latences ; au-delà chaque valeur est une moyenne intra-batch.
+    # Percentiles à lire à batch=1, débit à batch 8/32.
     per_image_ms = []
     for i, t in enumerate(times):
         this_batch = min(batch_size, n_images - i * batch_size)
@@ -249,9 +255,8 @@ def main():
         )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # Les deux switches (device + faiss) vont dans le nom de fichier : sinon deux
-    # runs de la même banque se collisionnent, et "_cuda" seul laisserait croire à
-    # un résultat full-GPU alors que la recherche a tourné sur CPU.
+    # Les deux switches dans le nom de fichier : sinon collision entre runs, et
+    # "_cuda" seul laisserait croire à un full-GPU avec recherche sur CPU.
     out_path = os.path.join(
         OUTPUT_DIR,
         "bench_{}_{}_{}.json".format(

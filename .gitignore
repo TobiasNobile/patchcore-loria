@@ -11,7 +11,8 @@ mlruns.db.bak-*
 .env
 results
 
-# Memory banks written by bin/fit_memory_bank_celeba.py. The pretrained MVTec
-# models elsewhere under models/ stay tracked; these are rebuildable and large
+# Memory banks written by bin/<dataset>/fit/memory_bank.py. The pretrained MVTec
+# models under models/mvtec/ stay tracked; these are rebuildable and large
 # (a 10% bank over 2000 images is ~640 MB of FAISS index).
 models/celeba/
+models/atr/

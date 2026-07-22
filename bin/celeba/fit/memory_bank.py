@@ -4,7 +4,7 @@ Pas de CLI : on édite le bloc CONFIG puis on lance. Le fit (extraction des
 features + coreset) est la moitié coûteuse et hors-ligne de PatchCore ; les
 scripts de scoring rechargent ensuite la banque.
 
-    python bin/fit_memory_bank_celeba.py
+    python bin/celeba/fit/memory_bank.py
 
 Écrit dans MODELS_DIR/<tag>/ l'index FAISS, patchcore_params.pkl et
 fit_config.json. Le <tag> vient de la CONFIG, donc deux configs différentes ne
@@ -13,7 +13,14 @@ s'écrasent pas et relancer une config identique est inutile.
 
 import logging
 import os
+import platform
 import time
+
+# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
+# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 import torch
@@ -34,9 +41,8 @@ LOGGER = logging.getLogger(__name__)
 SEED = 0
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Nombre d'images no-hat du train pour construire la banque. None = tout le split.
-# Le coût grimpe avec (chaque image ~784 features, coreset séquentiel).
-# Surchargeable par FIT_TRAIN_SUBSET pour balayer plusieurs tailles.
+# Images no-hat du train pour la banque. None = tout le split. Coût croissant
+# (~784 features par image, coreset séquentiel). Env : FIT_TRAIN_SUBSET.
 TRAIN_SUBSET = 2000
 _env_ts = os.environ.get("FIT_TRAIN_SUBSET")
 if _env_ts:
@@ -49,9 +55,8 @@ TARGET_EMBED_DIMENSION = 1024
 PATCHSIZE = 3
 ANOMALY_SCORER_NUM_NN = 1
 
-# identity = pas de coreset (fit rapide, grosse banque, inférence lente) ;
-# approx_greedy_coreset compresse la banque à PERCENTAGE des features (le levier
-# qui rend l'inférence rapide).
+# identity = pas de coreset : fit rapide, grosse banque, inférence lente.
+# approx_greedy_coreset compresse la banque à PERCENTAGE des features.
 SAMPLER_NAME = "approx_greedy_coreset"
 # Fraction des features gardée par le coreset. Surchargeable par FIT_CORESET_PCT.
 PERCENTAGE = 0.1
@@ -65,10 +70,10 @@ BATCH_SIZE = 8
 NUM_WORKERS = 8
 
 FAISS_ON_GPU = os.environ.get("FIT_FAISS_GPU", "").lower() in ("1", "true", "yes")
-FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "4"))
+FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
-# Surchargeable par FIT_MODELS_DIR : sur Grid'5000 on pointe vers le disque local
-# du nœud, pour ne pas saturer le quota /home avec des banques transitoires.
+# Env : FIT_MODELS_DIR. Sur Grid'5000, pointer le disque local du nœud pour ne
+# pas saturer le quota /home.
 MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/celeba")
 # --------------------------------------------------------------------------- #
 
