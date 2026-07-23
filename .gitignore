@@ -16,3 +16,4 @@ results
 # (a 10% bank over 2000 images is ~640 MB of FAISS index).
 models/celeba/
 models/atr/
+models/sohas/

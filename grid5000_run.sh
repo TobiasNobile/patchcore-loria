@@ -89,6 +89,10 @@ LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
 # restent côté serveur, où tourne l'inférence. true = les rapatrier.
 FETCH_BANKS="${FETCH_BANKS:-false}"
 
+# Dataset ciblé, pour ne rapatrier que les banques du bon dossier models/<dataset>/
+# (celeba, atr, sohas...). N'affecte que --fetch / FETCH_BANKS.
+DATASET="${DATASET:-celeba}"
+
 # true = soumet le job et rend la main tout de suite, sans suivre la sortie.
 # Le job survit à la fermeture du terminal : c'est OAR qui l'exécute, pas toi.
 DETACH="${DETACH:-false}"
@@ -146,10 +150,11 @@ fetch_results() {
   fi
 
   if [[ "${FETCH_BANKS}" == "true" ]]; then
-    echo "Récupération des banques mémoire..."
+    echo "Récupération des banques mémoire (models/${DATASET}/)..."
+    mkdir -p "${LOCAL_DIR}/models/${DATASET}/"
     rsync "${RSYNC_OPTS[@]}" \
-      "${G5K_HOST}:${REMOTE_DIR}/models/celeba/" \
-      "${LOCAL_DIR}/models/celeba/" 2>/dev/null || echo "  (pas de banque à rapatrier)"
+      "${G5K_HOST}:${REMOTE_DIR}/models/${DATASET}/" \
+      "${LOCAL_DIR}/models/${DATASET}/" 2>/dev/null || echo "  (pas de banque à rapatrier)"
   fi
 }
 
