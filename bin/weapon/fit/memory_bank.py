@@ -1,21 +1,19 @@
-"""Construit une banque mémoire PatchCore sur les images no-hat de CelebA.
+"""Construit une banque mémoire PatchCore sur les frames PERSONNE-SANS-ARME.
 
 Pas de CLI : on édite le bloc CONFIG puis on lance. Le fit (extraction des
 features + coreset) est la moitié coûteuse et hors-ligne de PatchCore ; les
 scripts de scoring rechargent ensuite la banque.
 
-    python bin/celeba/fit/memory_bank.py
+    WEAPON_PATH=/chemin/vers/export_roboflow_voc python bin/weapon/fit/memory_bank.py
 
 Écrit dans MODELS_DIR/<tag>/ l'index FAISS, patchcore_params.pkl et
 fit_config.json. Le <tag> vient de la CONFIG, donc deux configs différentes ne
 s'écrasent pas et relancer une config identique est inutile.
 """
 
-import json
 import logging
 import os
 import platform
-import resource
 import time
 
 # macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
@@ -33,7 +31,7 @@ import patchcore.common
 import patchcore.patchcore
 import patchcore.sampler
 import patchcore.utils
-from patchcore.datasets.celeba import CelebADataset, DatasetSplit
+from patchcore.datasets.weapon import WeaponDataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,9 +41,14 @@ LOGGER = logging.getLogger(__name__)
 SEED = 0
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# Images no-hat du train pour la banque. None = tout le split. Coût croissant
-# (~784 features par image, coreset séquentiel). Env : FIT_TRAIN_SUBSET.
-TRAIN_SUBSET = 2000
+# Racine de l'export Roboflow Pascal-VOC (contient train/valid/test).
+SOURCE = os.environ.get(
+    "WEAPON_PATH",
+    os.path.expanduser("~/dev/telecom/stage_1a/data/weapon-detection"),
+)
+
+# Frames sans arme du train pour la banque. None = tout le split. Env : FIT_TRAIN_SUBSET.
+TRAIN_SUBSET = None
 _env_ts = os.environ.get("FIT_TRAIN_SUBSET")
 if _env_ts:
     TRAIN_SUBSET = None if _env_ts.lower() in ("none", "all") else int(_env_ts)
@@ -55,16 +58,11 @@ LAYERS_TO_EXTRACT_FROM = ["layer2", "layer3"]
 PRETRAIN_EMBED_DIMENSION = 1024
 TARGET_EMBED_DIMENSION = 1024
 PATCHSIZE = 3
-# k du scoring (nb de plus proches voisins). Purement paramètre de requête : il
-# n'affecte ni la banque ni la RAM du fit, juste le score. Surchargeable par
-# FIT_NUM_NN, et re-surchargeable au scoring par HIST_NUM_NN.
-ANOMALY_SCORER_NUM_NN = int(os.environ.get("FIT_NUM_NN", "1"))
+ANOMALY_SCORER_NUM_NN = 1
 
 # identity = pas de coreset : fit rapide, grosse banque, inférence lente.
 # approx_greedy_coreset compresse la banque à PERCENTAGE des features.
-# Surchargeable par FIT_SAMPLER (identity | greedy_coreset | approx_greedy_coreset)
-# pour balayer sampler et taille de banque sans éditer le script.
-SAMPLER_NAME = os.environ.get("FIT_SAMPLER", "approx_greedy_coreset")
+SAMPLER_NAME = "approx_greedy_coreset"
 # Fraction des features gardée par le coreset. Surchargeable par FIT_CORESET_PCT.
 PERCENTAGE = 0.1
 _env_pct = os.environ.get("FIT_CORESET_PCT")
@@ -81,7 +79,7 @@ FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "1" if platform.syst
 
 # Env : FIT_MODELS_DIR. Sur Grid'5000, pointer le disque local du nœud pour ne
 # pas saturer le quota /home.
-MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/celeba")
+MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/weapon")
 # --------------------------------------------------------------------------- #
 
 
@@ -111,12 +109,17 @@ def main():
     device = patchcore.utils.set_torch_device(GPU)
     patchcore.utils.fix_seeds(SEED)
 
-    train_dataset = CelebADataset(
-        resize=RESIZE, imagesize=IMAGESIZE, split=DatasetSplit.TRAIN, seed=SEED
+    train_dataset = WeaponDataset(
+        source=SOURCE,
+        resize=RESIZE,
+        imagesize=IMAGESIZE,
+        split=DatasetSplit.TRAIN,
+        seed=SEED,
     )
     if TRAIN_SUBSET is not None:
-        train_dataset = torch.utils.data.Subset(train_dataset, range(TRAIN_SUBSET))
-    LOGGER.info("Fitting on %d no-hat train images.", len(train_dataset))
+        n = min(TRAIN_SUBSET, len(train_dataset))
+        train_dataset = torch.utils.data.Subset(train_dataset, range(n))
+    LOGGER.info("Fitting on %d weapon-free (person) train frames.", len(train_dataset))
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -154,20 +157,15 @@ def main():
 
     bank = patchcore_instance.anomaly_scorer.detection_features
     bank_size = int(len(bank))
-    # Pic de RAM du process (ru_maxrss : Ko sur Linux, octets sur macOS). C'est
-    # le facteur limitant de l'expé de montée en taille de banque (nuage 1024-dim
-    # + index FAISS, tous deux en RAM CPU). En Go pour lecture directe.
-    _maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    peak_rss_gb = _maxrss / (1024 ** 2 if platform.system() == "Linux" else 1024 ** 3)
     LOGGER.info(
-        "Fit took %.1f s. Memory bank holds %d patch features. Peak RSS %.1f Go.",
+        "Fit took %.1f s. Memory bank holds %d patch features.",
         fit_seconds,
         bank_size,
-        peak_rss_gb,
     )
 
     config = {
         "seed": SEED,
+        "source": SOURCE,
         "train_subset": TRAIN_SUBSET,
         "backbone_name": BACKBONE_NAME,
         "layers_to_extract_from": LAYERS_TO_EXTRACT_FROM,
@@ -181,30 +179,15 @@ def main():
         "imagesize": IMAGESIZE,
         "faiss_on_gpu": FAISS_ON_GPU,
         "device": str(device),
-        # Trace du hardware : nom complet du nœud + cluster g5k (gres-3.nancy... -> gres).
-        "node": platform.node(),
-        "cluster": platform.node().split(".")[0].split("-")[0],
-        "gpu_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
         "torch_version": torch.__version__,
         "n_train_images": len(train_dataset),
         "memory_bank_size": bank_size,
         "feature_dim": int(np.asarray(bank).shape[1]),
-        "bank_gb": bank_size * int(np.asarray(bank).shape[1]) * 4 / 1024 ** 3,
-        "peak_rss_gb": peak_rss_gb,
         "fit_seconds": fit_seconds,
     }
-    save_dir = os.path.join(MODELS_DIR, build_tag())
-    if os.environ.get("FIT_NO_SAVE", "").lower() in ("1", "true", "yes"):
-        # Expé de montée en taille : une banque identity peut peser des centaines
-        # de Go. On ne veut que les mesures (taille, pic RAM, temps), pas persister
-        # le monstre -> on écrit juste le fit_config.json (léger) et on saute
-        # l'index FAISS + les params.
-        os.makedirs(save_dir, exist_ok=True)
-        with open(os.path.join(save_dir, "fit_config.json"), "w") as fh:
-            json.dump(config, fh, indent=2)
-        LOGGER.info("FIT_NO_SAVE : banque non persistée, mesures dans %s", save_dir)
-    else:
-        patchcore.banks.save_bank(patchcore_instance, save_dir, config)
+    patchcore.banks.save_bank(
+        patchcore_instance, os.path.join(MODELS_DIR, build_tag()), config
+    )
 
 
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ class SohasDataset(torch.utils.data.Dataset):
         imagesize=224,
         split=DatasetSplit.TRAIN,
         seed=0,
+        min_weapon_area_frac=None,
         **kwargs,
     ):
         """
@@ -67,11 +68,20 @@ class SohasDataset(torch.utils.data.Dataset):
             split: [DatasetSplit]. TRAIN (frames sans arme) ou TEST (équilibré).
                    TEST charge aussi le masque bbox.
             seed: [int]. Pilote le découpage train/test et l'équilibrage.
+            min_weapon_area_frac: [float|None]. Ne garde comme `weapon` que les
+                   frames où l'arme occupe >= cette fraction de l'aire du cadre.
+                   Sert à scoper la tâche au domaine « gros plan » (SOHAS mélange
+                   gros plans d'arme et scènes d'action, deux domaines distincts).
+                   None -> lit SOHAS_MIN_WEAPON_AREA (défaut 0 = pas de filtre).
+                   N'affecte que les frames armes, donc jamais la banque (good).
         """
         super().__init__()
         self.source = source
         self.split = split
         self.seed = seed
+        if min_weapon_area_frac is None:
+            min_weapon_area_frac = float(os.environ.get("SOHAS_MIN_WEAPON_AREA", "0"))
+        self.min_weapon_area_frac = min_weapon_area_frac
 
         samples = self._index_frames()
         self.data = self._split(samples, split, seed)
@@ -169,7 +179,28 @@ class SohasDataset(torch.utils.data.Dataset):
                 "Aucune frame trouvée sous {}. Attendu : images/ + "
                 "annotations/xmls/ (Sohas_weapon-Detection).".format(self.source)
             )
+
+        if self.min_weapon_area_frac > 0:
+            # On ne garde côté weapon que les frames où l'arme remplit assez le
+            # cadre (gros plans) : les scènes d'action (arme minuscule) sont d'un
+            # autre domaine et polluent la mesure. Le good n'est jamais touché.
+            samples = [
+                s for s in samples
+                if not s["is_anomaly"]
+                or self._weapon_area_frac(s) >= self.min_weapon_area_frac
+            ]
         return samples
+
+    @staticmethod
+    def _weapon_area_frac(sample):
+        """Fraction de l'aire du cadre couverte par le plus gros bbox d'arme."""
+        area = sample["width"] * sample["height"]
+        if area <= 0 or not sample["weapon_boxes"]:
+            return 0.0
+        largest = max(
+            (x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in sample["weapon_boxes"]
+        )
+        return largest / area
 
     @staticmethod
     def _split(samples, split, seed):

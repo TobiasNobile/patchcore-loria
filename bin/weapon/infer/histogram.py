@@ -1,14 +1,14 @@
-"""Compare les scores d'anomalie des images NO-HAT et HAT du split TEST.
+"""Compare les scores d'anomalie des frames GOOD (sans arme) et WEAPON du TEST.
 
-Charge une banque mémoire construite par bin/celeba/fit/memory_bank.py — aucun
+Charge une banque mémoire construite par bin/weapon/fit/memory_bank.py — aucun
 fit ici. Les hyperparamètres du fit (backbone, sampler, percentage, train_subset,
 resize/imagesize, seed) sont relus dans le fit_config.json de la banque : une
 image encodée autrement que la banque contre laquelle on la compare donnerait des
 distances qui ne veulent rien dire, et le ferait silencieusement.
 
-    python bin/celeba/fit/memory_bank.py                     # une fois, hors ligne
-    python bin/celeba/infer/histogram.py                     # histogramme + stats
-    python bin/celeba/infer/histogram.py --n_per_class 200   # échantillon plus petit
+    WEAPON_PATH=/chemin/export_voc python bin/weapon/fit/memory_bank.py  # une fois
+    python bin/weapon/infer/histogram.py                     # histogramme + stats
+    python bin/weapon/infer/histogram.py --n_per_class 200   # échantillon plus petit
 """
 
 import json
@@ -33,7 +33,7 @@ import patchcore.banks
 import patchcore.metrics
 import patchcore.tracking
 import patchcore.utils
-from patchcore.datasets.celeba import CelebADataset, DatasetSplit
+from patchcore.datasets.weapon import WeaponDataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,17 +44,20 @@ COLOR_ANOMALY = "#E8A33D"
 # --------------------------------------------------------------------------- #
 # CONFIG — édite ici, puis lance le script.
 # --------------------------------------------------------------------------- #
-# Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
+# Dossier écrit par bin/weapon/fit/memory_bank.py (MODELS_DIR/<tag>).
 # BANK_DIR et OUTPUT_PATH surchargeables par HIST_BANK_DIR / HIST_OUTPUT_PATH,
 # pour scorer plusieurs banques dans un même job.
-BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
+BANK_DIR = "models/weapon/wideresnet50_approx_greedy_coreset_p0.1_tsall_s0"
 
-OUTPUT_PATH = "results/celeba/histograms/hist_celeba.png"
+OUTPUT_PATH = "results/weapon/histograms/hist_weapon.png"
 
 BANK_DIR = os.environ.get("HIST_BANK_DIR", BANK_DIR)
 OUTPUT_PATH = os.environ.get("HIST_OUTPUT_PATH", OUTPUT_PATH)
 
-# Échantillon PAR classe, effectifs égaux. Plafonné au disponible (~839 hat).
+# Racine du jeu. Par défaut relu du fit_config de la banque, surchargeable ici/env.
+SOURCE = os.environ.get("WEAPON_PATH")
+
+# Échantillon PAR classe, effectifs égaux. Plafonné au disponible.
 N_PER_CLASS_DEFAULT = 1000
 
 GPU = [0]  # [] force le CPU. Retombe sur CPU sur une machine sans CUDA de toute façon.
@@ -62,15 +65,14 @@ BINS = 50
 TEST_BATCH_SIZE = 8
 NUM_WORKERS = 8
 
-# La recherche FAISS domine le scoring et croît avec la banque (~14 s par batch
-# de 8 pour 78k vecteurs sur CPU). HIST_FAISS_GPU=1 la bascule sur GPU, index
-# alors entièrement en mémoire GPU (4 Ko par vecteur).
+# La recherche FAISS domine le scoring et croît avec la banque. HIST_FAISS_GPU=1
+# la bascule sur GPU, index alors entièrement en mémoire GPU (4 Ko par vecteur).
 FAISS_ON_GPU = os.environ.get("HIST_FAISS_GPU", "").lower() in ("1", "true", "yes")
 FAISS_NUM_WORKERS = int(os.environ.get("HIST_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
 # Une expérience MLflow par tâche. run_name encode la config, l'origine est
 # taguée par patchcore.tracking.
-LOG_PROJECT = "celeba-histograms"
+LOG_PROJECT = "weapon-histograms"
 # --------------------------------------------------------------------------- #
 
 
@@ -99,10 +101,7 @@ def histogram_jaccard(scores_a, scores_b, edges):
     """Indice de Jaccard du recouvrement des deux distributions, sur les mêmes
     bins que l'histogramme tracé : J = somme min(n_i, a_i) / somme max(n_i, a_i).
 
-    L'intersection (somme des min) compte bin par bin la classe minoritaire : les
-    images qu'un classifieur par seuil se tromperait forcément (FP + FN
-    incompressibles), d'où "FP/FN rapportés à l'union". J=0 séparables, J=1
-    identiques. Renvoie {jaccard, intersection, union}.
+    J=0 séparables, J=1 identiques. Renvoie {jaccard, intersection, union}.
     """
     n = np.histogram(np.asarray(scores_a, dtype=float), bins=edges)[0]
     a = np.histogram(np.asarray(scores_b, dtype=float), bins=edges)[0]
@@ -115,16 +114,14 @@ def histogram_jaccard(scores_a, scores_b, edges):
     }
 
 
-def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[float, bool]:
-    """Test t unilatéral de Welch entre scores no-hat et hat : la moyenne des
+def t_test_scores(scores_good, scores_anomaly):
+    """Test t unilatéral de Welch entre scores good et weapon : la moyenne des
     scores d'anomalie est-elle significativement plus haute ? Seuil 5%.
     Renvoie (p_value, True si p < 0.05).
     """
-
     res = ttest_ind(scores_good, scores_anomaly, alternative="less", equal_var=False)
     p_value = float(res.pvalue)
-    greater_anomaly_scores = p_value < 0.05
-    return p_value, greater_anomaly_scores
+    return p_value, p_value < 0.05
 
 
 @click.command()
@@ -133,34 +130,19 @@ def t_test_scores(scores_good: np.ndarray, scores_anomaly: np.ndarray) -> tuple[
     type=int,
     default=N_PER_CLASS_DEFAULT,
     show_default=True,
-    help="Taille d'échantillon PAR classe (no-hat et hat), effectifs égaux. "
-    "Plafonné au nombre d'images disponibles par classe dans le test "
-    "(la classe hat n'a qu'~839 images).",
+    help="Taille d'échantillon PAR classe (good et weapon), effectifs égaux. "
+    "Plafonné au nombre de frames disponibles par classe dans le test.",
 )
 def main(n_per_class):
     """Score le split TEST contre une banque déjà construite, puis superpose la
-    distribution des scores d'anomalie des images NO-HAT (normal, bleu) et HAT
-    (anomalie, orange) — avec le MÊME effectif par classe (`n_per_class`,
-    échantillonné aléatoirement, plafonné au dispo). Loggé dans MLflow (AUROC +
-    means + figure)."""
+    distribution des scores d'anomalie des frames GOOD (sans arme, bleu) et
+    WEAPON (avec arme, orange) — avec le MÊME effectif par classe. Loggé dans
+    MLflow (AUROC + means + figure)."""
     device = patchcore.utils.set_torch_device(GPU)
 
     patchcore_instance, fit_config = patchcore.banks.load_bank(
         BANK_DIR, device, FAISS_ON_GPU, FAISS_NUM_WORKERS
     )
-
-    # Classe les résultats par pct de coreset (sous-dossier p<pct>, ou identity),
-    # pour retrouver plus tard les histos par taux de compression. Idempotent.
-    global OUTPUT_PATH
-    _subdir = (
-        "identity"
-        if fit_config.get("sampler_name") == "identity"
-        else "p{:g}".format(fit_config.get("coreset_pct"))
-    )
-    _dir, _base = os.path.split(OUTPUT_PATH)
-    if os.path.basename(_dir) != _subdir:
-        OUTPUT_PATH = os.path.join(_dir, _subdir, _base)
-        LOGGER.info("Histogramme classé par pct -> %s", OUTPUT_PATH)
 
     # k est un paramètre de scoring, pas de construction : surchargeable sans
     # re-fitter. imagelevel_nn a capturé l'ancien k dans sa closure -> rebind.
@@ -174,12 +156,14 @@ def main(n_per_class):
             lambda q, s=scorer, k=num_nn_used: s.nn_method.run(k, q)
         )
         LOGGER.info("num_nn surchargé à %d (HIST_NUM_NN).", num_nn_used)
-    # Le seed de la banque pilote aussi l'équilibrage du split TEST : mêmes
-    # images d'une analyse à l'autre.
+    # Le seed de la banque pilote aussi le split/équilibrage du TEST : mêmes
+    # frames d'une analyse à l'autre.
     seed = fit_config["seed"]
     patchcore.utils.fix_seeds(seed)
 
-    test_dataset = CelebADataset(
+    source = SOURCE or fit_config.get("source")
+    test_dataset = WeaponDataset(
+        source=source,
         resize=fit_config["resize"],
         imagesize=fit_config["imagesize"],
         split=DatasetSplit.TEST,
@@ -194,7 +178,7 @@ def main(n_per_class):
     n = min(n_per_class, len(normal_idx), len(anomaly_idx))
     if n < n_per_class:
         LOGGER.warning(
-            "n_per_class=%d demandé mais seulement %d no-hat / %d hat "
+            "n_per_class=%d demandé mais seulement %d good / %d weapon "
             "disponibles => on utilise n=%d par classe.",
             n_per_class, len(normal_idx), len(anomaly_idx), n,
         )
@@ -222,11 +206,9 @@ def main(n_per_class):
             "seed", "train_subset", "backbone_name", "sampler_name",
             "coreset_pct", "resize", "imagesize", "memory_bank_size",
         )},
-        # Trace du cluster/nœud de fit (si la banque a été construite après l'ajout).
-        **{k: fit_config[k] for k in ("node", "cluster") if k in fit_config},
     }
 
-    LOGGER.info("Scoring %d test images (n=%d par classe)...", 2 * n, n)
+    LOGGER.info("Scoring %d test frames (n=%d par classe)...", 2 * n, n)
     if device_is_cuda:
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
@@ -240,7 +222,7 @@ def main(n_per_class):
     labels = np.asarray(labels_gt, dtype=int)
     normal_scores = scores[labels == 0]
     anomaly_scores = scores[labels == 1]
-    LOGGER.info("Histogramme sur n=%d par classe (no-hat vs hat).", n)
+    LOGGER.info("Histogramme sur n=%d par classe (good vs weapon).", n)
 
     # AUROC sur l'échantillon équilibré tracé.
     sampled_scores = np.concatenate([normal_scores, anomaly_scores])
@@ -251,7 +233,7 @@ def main(n_per_class):
             sampled_scores, sampled_labels
         )["auroc"]
 
-    # W1 normalisée entre no-hat et hat : l'écart d'amplitude, sans échelle.
+    # W1 normalisée entre good et weapon : l'écart d'amplitude, sans échelle.
     wass = normalized_wasserstein(normal_scores, anomaly_scores)
     p_value, _ = t_test_scores(normal_scores, anomaly_scores)
 
@@ -267,11 +249,11 @@ def main(n_per_class):
     plt.figure(figsize=(8, 5))
     plt.hist(
         normal_scores, bins=edges, alpha=0.65, color=COLOR_NORMAL,
-        label="No-hat (normal)  n={}".format(n),
+        label="Good (sans arme)  n={}".format(n),
     )
     plt.hist(
         anomaly_scores, bins=edges, alpha=0.65, color=COLOR_ANOMALY,
-        label="Hat (anomalie)  n={}".format(n),
+        label="Weapon (avec arme)  n={}".format(n),
     )
     plt.xlabel("Score d'anomalie")
     plt.ylabel("Nombre d'instances")
@@ -279,9 +261,9 @@ def main(n_per_class):
     tag = "identity" if sampler_name == "identity" else "{} p={}".format(
         sampler_name, percentage
     )
-    plt.title("{}  |  ts={}  |  nn={}  |  W1n={:.3f}  |  J={:.3f}".format(
-        tag, fit_config["train_subset"], num_nn_used,
-        wass["w1_normalized"], jac["jaccard"],
+    plt.title("{}  |  ts={}  |  nn={}  |  AUROC={:.3f}  |  W1n={:.3f}".format(
+        tag, fit_config["train_subset"], num_nn_used, auroc,
+        wass["w1_normalized"],
     ))
     plt.legend()
     plt.grid(True, alpha=0.2)
