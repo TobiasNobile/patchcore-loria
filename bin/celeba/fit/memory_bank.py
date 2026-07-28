@@ -97,13 +97,24 @@ def build_tag():
     )
 
 
+# Dimension de la projection Johnson-Lindenstrauss du coreset. C'est ELLE qui
+# fixe la VRAM au fit : projected = N_patches x DIM x 4 o, tout sur le GPU d'un
+# bloc. 128 (défaut papier) = 40 Go à 100k images -> OOM sur 44 Go. 64 -> 20 Go,
+# large, distances J-L à peine dégradées. Surchargeable par FIT_CORESET_PROJ_DIM.
+CORESET_PROJ_DIM = int(os.environ.get("FIT_CORESET_PROJ_DIM", "128"))
+
+
 def build_sampler(device):
     if SAMPLER_NAME == "identity":
         return patchcore.sampler.IdentitySampler()
     if SAMPLER_NAME == "greedy_coreset":
-        return patchcore.sampler.GreedyCoresetSampler(PERCENTAGE, device)
+        return patchcore.sampler.GreedyCoresetSampler(
+            PERCENTAGE, device, dimension_to_project_features_to=CORESET_PROJ_DIM
+        )
     if SAMPLER_NAME == "approx_greedy_coreset":
-        return patchcore.sampler.ApproximateGreedyCoresetSampler(PERCENTAGE, device)
+        return patchcore.sampler.ApproximateGreedyCoresetSampler(
+            PERCENTAGE, device, dimension_to_project_features_to=CORESET_PROJ_DIM
+        )
     raise ValueError("Unknown SAMPLER_NAME: {}".format(SAMPLER_NAME))
 
 
@@ -177,6 +188,7 @@ def main():
         "anomaly_scorer_num_nn": ANOMALY_SCORER_NUM_NN,
         "sampler_name": SAMPLER_NAME,
         "coreset_pct": PERCENTAGE,
+        "coreset_proj_dim": CORESET_PROJ_DIM,
         "resize": RESIZE,
         "imagesize": IMAGESIZE,
         "faiss_on_gpu": FAISS_ON_GPU,
