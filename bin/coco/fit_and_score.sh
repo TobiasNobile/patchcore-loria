@@ -39,20 +39,25 @@ export DEST="${COCO_PATH}"
 echo "=== FETCH COCO -> ${COCO_PATH} (CAP_NORMAL=${CAP_NORMAL}) ==="
 python tools/coco_fetch.py
 
-# tag identique à build_tag() du fit
+# tag identique à build_tag() du fit (suffixe layer vide pour le défaut layer2+3).
 ts_lc=$(printf '%s' "${FIT_TRAIN_SUBSET}" | tr '[:upper:]' '[:lower:]')
 case "${ts_lc}" in ""|none|all) TS="all";; *) TS="${FIT_TRAIN_SUBSET}";; esac
 if [ "${FIT_SAMPLER}" = "identity" ]; then SAMP="identity"; else SAMP="${FIT_SAMPLER}_p${FIT_CORESET_PCT}"; fi
-TAG="wideresnet50_${SAMP}_ts${TS}_s${SEED}"
+case "${FIT_LAYERS:-}" in
+  ""|"layer2,layer3") LSUF="";;
+  *) LSUF="_$(printf '%s' "${FIT_LAYERS}" | sed 's/layer/l/g; s/,/-/g')";;
+esac
+TAG="wideresnet50${LSUF}_${SAMP}_ts${TS}_s${SEED}"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 
-echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN}"
+echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3}"
 echo "    banque (conservée) -> ${BANK_DIR}"
 python bin/coco/fit/memory_bank.py
 
 echo "=== HISTOGRAMME good vs knife ==="
 export HIST_BANK_DIR="${BANK_DIR}"
-export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
+export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco${LSUF}_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
+export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${LSUF}/overlay_idx{idx}.png"
 python bin/coco/infer/histogram.py --n_per_class "${NPC}"
 
 echo "=== 30 HEATMAPS (${HEATMAPS_PER_CLASS} good + ${HEATMAPS_PER_CLASS} knife) ==="

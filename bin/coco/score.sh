@@ -29,7 +29,11 @@ SEED=0
 ts_lc=$(printf '%s' "${FIT_TRAIN_SUBSET}" | tr '[:upper:]' '[:lower:]')
 case "${ts_lc}" in ""|none|all) TS="all";; *) TS="${FIT_TRAIN_SUBSET}";; esac
 if [ "${FIT_SAMPLER}" = "identity" ]; then SAMP="identity"; else SAMP="${FIT_SAMPLER}_p${FIT_CORESET_PCT}"; fi
-TAG="wideresnet50_${SAMP}_ts${TS}_s${SEED}"
+case "${FIT_LAYERS:-}" in
+  ""|"layer2,layer3") LSUF="";;
+  *) LSUF="_$(printf '%s' "${FIT_LAYERS}" | sed 's/layer/l/g; s/,/-/g')";;
+esac
+TAG="wideresnet50${LSUF}_${SAMP}_ts${TS}_s${SEED}"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 if [ ! -d "${BANK_DIR}" ]; then
   echo "ERREUR : banque introuvable -> ${BANK_DIR}" >&2
@@ -46,7 +50,8 @@ python tools/coco_fetch.py
 
 echo "=== HISTOGRAMME good vs knife (banque ${TAG}, FAISS GPU) ==="
 export HIST_BANK_DIR="${BANK_DIR}"
-export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_ts${TS}_nn${NUM_NN}_s${SEED}.png"
+export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco${LSUF}_ts${TS}_nn${NUM_NN}_s${SEED}.png"
+export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${LSUF}/overlay_idx{idx}.png"
 python bin/coco/infer/histogram.py --n_per_class "${NPC}"
 
 echo "=== 30 HEATMAPS (${HEATMAPS_PER_CLASS} good + ${HEATMAPS_PER_CLASS} knife) ==="

@@ -49,7 +49,14 @@ if _env_ts:
     TRAIN_SUBSET = None if _env_ts.lower() in ("none", "all") else int(_env_ts)
 
 BACKBONE_NAME = "wideresnet50"
-LAYERS_TO_EXTRACT_FROM = ["layer2", "layer3"]
+# Couches du backbone. Défaut layer2+layer3. Env FIT_LAYERS (CSV) pour n'en prendre
+# qu'une : "layer2" (784 patches/img) ou "layer3" (196 patches/img, 4x plus léger).
+# La résolution des patches = celle de la 1re couche listée.
+_env_layers = os.environ.get("FIT_LAYERS")
+LAYERS_TO_EXTRACT_FROM = (
+    [l.strip() for l in _env_layers.split(",") if l.strip()]
+    if _env_layers else ["layer2", "layer3"]
+)
 PRETRAIN_EMBED_DIMENSION = 1024
 TARGET_EMBED_DIMENSION = 1024
 PATCHSIZE = 3
@@ -74,14 +81,22 @@ FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "1" if platform.syst
 
 MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/coco")
 
+def _layers_suffix():
+    """Suffixe de couche pour le tag. Vide pour le défaut layer2+layer3 (compat
+    banques existantes) ; sinon _l2 / _l3 pour ne pas écraser d'autres banques."""
+    if LAYERS_TO_EXTRACT_FROM == ["layer2", "layer3"]:
+        return ""
+    return "_" + "-".join(l.replace("layer", "l") for l in LAYERS_TO_EXTRACT_FROM)
+
+
 def build_tag():
     sampler = (
         "identity"
         if SAMPLER_NAME == "identity"
         else "{}_p{:g}".format(SAMPLER_NAME, PERCENTAGE)
     )
-    return "{}_{}_ts{}_s{}".format(
-        BACKBONE_NAME, sampler, TRAIN_SUBSET or "all", SEED
+    return "{}{}_{}_ts{}_s{}".format(
+        BACKBONE_NAME, _layers_suffix(), sampler, TRAIN_SUBSET or "all", SEED
     )
 
 
