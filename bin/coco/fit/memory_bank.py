@@ -58,8 +58,8 @@ ANOMALY_SCORER_NUM_NN = int(os.environ.get("FIT_NUM_NN", "1"))
 
 # identity | greedy_coreset | approx_greedy_coreset. Env : FIT_SAMPLER.
 SAMPLER_NAME = os.environ.get("FIT_SAMPLER", "approx_greedy_coreset")
-# Fraction gardée par le coreset. Env : FIT_CORESET_PCT.
-PERCENTAGE = 0.1
+# Fraction gardée par le coreset. Env : FIT_CORESET_PCT (5% = la cible COCO).
+PERCENTAGE = 0.05
 _env_pct = os.environ.get("FIT_CORESET_PCT")
 if _env_pct:
     PERCENTAGE = float(_env_pct)
@@ -73,8 +73,6 @@ FAISS_ON_GPU = os.environ.get("FIT_FAISS_GPU", "").lower() in ("1", "true", "yes
 FAISS_NUM_WORKERS = int(os.environ.get("FIT_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
 MODELS_DIR = os.environ.get("FIT_MODELS_DIR", "models/coco")
-# --------------------------------------------------------------------------- #
-
 
 def build_tag():
     sampler = (
