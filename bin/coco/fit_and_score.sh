@@ -23,7 +23,12 @@ export FIT_NUM_NN="${FIT_NUM_NN:-3}"
 export FIT_TRAIN_SUBSET="${FIT_TRAIN_SUBSET:-20000}"
 export FIT_MODELS_DIR="${FIT_MODELS_DIR:-models/coco}"     # home = banque conservée
 export COCO_PATH="${COCO_PATH:-/tmp/${USER}/coco}"          # images node-local
+# La banque (~qq Go à 5%) tient en VRAM -> FAISS GPU au scoring, sinon la
+# recherche CPU sur 1,5 M+ vecteurs traîne et dépasse le walltime.
+export HIST_FAISS_GPU="${HIST_FAISS_GPU:-1}"
+export INFER_FAISS_GPU="${INFER_FAISS_GPU:-1}"
 HEATMAPS_PER_CLASS="${HEATMAPS_PER_CLASS:-15}"             # 15+15 = 30
+NPC="${NPC:-1000}"                                          # n_per_class histogramme
 SEED=0
 
 # 1) FETCH — assez de normal pour la banque + le 20% réservé au test.
@@ -48,7 +53,7 @@ python bin/coco/fit/memory_bank.py
 echo "=== HISTOGRAMME good vs knife ==="
 export HIST_BANK_DIR="${BANK_DIR}"
 export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
-python bin/coco/infer/histogram.py
+python bin/coco/infer/histogram.py --n_per_class "${NPC}"
 
 echo "=== 30 HEATMAPS (${HEATMAPS_PER_CLASS} good + ${HEATMAPS_PER_CLASS} knife) ==="
 python bin/coco/infer/heatmap.py --n_per_class "${HEATMAPS_PER_CLASS}"
