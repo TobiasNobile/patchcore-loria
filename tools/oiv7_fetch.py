@@ -54,7 +54,9 @@ def _load(classes, max_samples):
             label_types=["detections"],
             classes=classes,
             max_samples=max_samples,
-            only_matching=True,
+            only_matching=False,  # GARDER tous les labels (sinon Person est
+            # supprimé des images Knife -> 0 anomalie person+knife). Indispensable
+            # pour détecter person ET knife sur la même image.
             shuffle=True,
             seed=SEED,
             dataset_name="oiv7_{}_{}_{}".format("-".join(classes), split, max_samples or "all"),
