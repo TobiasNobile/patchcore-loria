@@ -279,6 +279,36 @@ Les variables d'environnement disponibles (tailles, pourcentages, nombre de
 voisins, emplacement des banques, reprise) sont documentées en tête de
 `sweep_histograms.sh`.
 
+## COCO + Open Images V7 — dataset fusionné « personne + couteau »
+
+Même protocole one-class que CelebA, mais l'anomalie est un couteau tenu par une
+personne : la banque est construite sur des images de personnes SANS couteau, et
+l'on compare les scores personne-sans-couteau vs personne-avec-couteau sur un test
+équilibré. Deux jeux fusionnés, aux schémas d'annotation différents :
+
+- **COCO** : annoté exhaustivement par image → on lit les bounding boxes `person`
+  et `knife` (anomalie = image contenant une personne ET une box couteau).
+- **Open Images V7** : les boxes d'OID sont annotées par classe et
+  non-exhaustivement (sur une image « Knife », la personne n'est souvent pas
+  boxée). On utilise donc les **labels image-level positifs** : anomalie =
+  `Person` ET `Knife` positifs, normal = `Person` positif sans `Knife`.
+
+Composition (l'anomalie prend toutes les images disponibles ; le normal est
+plafonné à ~50 % par source pour équilibrer la banque) :
+
+| Source | Personne + couteau (anomalie) | Part de l'anomalie | Normal |
+| --- | --- | --- | --- |
+| COCO (train+val)   | 2 459 | ~99 % | plafonné à ~50 % de la banque |
+| Open Images V7     | 28    | ~1 %  | plafonné à ~50 % de la banque |
+| **Fusion**         | **2 487** | 100 % | ~50 / 50 COCO / OIV7 |
+
+**Constat clé** : Open Images V7 n'apporte quasiment pas d'anomalies utiles —
+seulement ~4 % de ses images « Knife » contiennent une personne, le reste étant
+des couteaux de cuisine, dagues et armes (labels co-occurrents `Kitchen knife`,
+`Dagger`, `Cutting board`, `Weapon`…). COCO, exhaustivement annoté, reste la seule
+source substantielle de scènes « personne + couteau » ; la banque fusionnée est
+donc ~50 / 50 côté normal mais son anomalie est à ~99 % du COCO.
+
 ## MLflow
 
 Tous les runs vivent dans une base unique, y compris ceux rapatriés des serveurs
