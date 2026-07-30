@@ -1,7 +1,6 @@
 #!/usr/bin/env python
-"""Diagnostic : les images couteau OIV7 portent-elles une box Person quand on
-charge TOUS les labels ? Tranche entre (A) FiftyOne charge en class-scoped (fixable)
-et (B) OID ne co-annote pas (il faudrait relâcher/lâcher)."""
+"""Diagnostic v2 : sur les images couteau OIV7 du split TRAIN, combien ont
+Person en IMAGE-LEVEL (labels), et FiftyOne me les rend-il ? (vs les boxes)."""
 import os
 from collections import Counter
 
@@ -15,13 +14,21 @@ import fiftyone as fo
 import fiftyone.zoo as foz
 
 
-def det_fields(sample):
-    return [n for n, f in sample.iter_fields() if isinstance(f, fo.Detections)]
-
-
-def labels_of(sample, fields):
+def pos_imagelevel(sample, cls_fields):
+    """Labels image-level POSITIFS (confidence >= 0.5 ; OID: 1=positif, 0=négatif)."""
     labs = set()
-    for fld in fields:
+    for fld in cls_fields:
+        c = sample[fld]
+        if c and getattr(c, "classifications", None):
+            for cc in c.classifications:
+                if cc.confidence is None or cc.confidence >= 0.5:
+                    labs.add(cc.label)
+    return labs
+
+
+def box_labels(sample, det_fields):
+    labs = set()
+    for fld in det_fields:
         d = sample[fld]
         if d and getattr(d, "detections", None):
             for det in d.detections:
@@ -29,32 +36,34 @@ def labels_of(sample, fields):
     return labs
 
 
-def check(desc, **load_kwargs):
-    print("\n===", desc, "===")
-    ds = foz.load_zoo_dataset(
-        "open-images-v7", split="validation", label_types=["detections"],
-        **load_kwargs,
-    )
-    fields = det_fields(ds.first())
-    print("  champs Detections :", fields)
-    withp = knives = 0
-    co = Counter()
-    for s in ds:
-        labs = labels_of(s, fields)
-        if "Knife" in labs:
-            knives += 1
-            for l in labs:
-                co[l] += 1
-            if "Person" in labs:
-                withp += 1
-    print("  images couteau : {} | dont avec box Person : {}".format(knives, withp))
-    print("  labels co-occurrents sur images couteau :", co.most_common(12))
+print("=== TRAIN, classes=['Knife'], label_types=[detections,classifications], max=500 ===")
+ds = foz.load_zoo_dataset(
+    "open-images-v7", split="train",
+    label_types=["detections", "classifications"],
+    classes=["Knife"], max_samples=500, only_matching=False,
+    dataset_name="diag_knife_train",
+)
+s0 = ds.first()
+cls_fields = [n for n, f in s0.iter_fields() if isinstance(f, fo.Classifications)]
+det_fields = [n for n, f in s0.iter_fields() if isinstance(f, fo.Detections)]
+print("  champs classifications :", cls_fields, "| détections :", det_fields)
 
-
-# A) tel qu'on faisait : classes=["Knife"]
-check("classes=['Knife'], only_matching=False, max=59",
-      classes=["Knife"], max_samples=59, only_matching=False)
-
-# B) en demandant AUSSI Person dans classes (pour forcer le DL des annos Person)
-check("classes=['Person','Knife'], only_matching=False, max=400",
-      classes=["Person", "Knife"], max_samples=400, only_matching=False)
+total = p_label = p_box = pk_label = 0
+co = Counter()
+for s in ds:
+    total += 1
+    im = pos_imagelevel(s, cls_fields)
+    bx = box_labels(s, det_fields)
+    if "Person" in im:
+        p_label += 1
+    if "Person" in bx:
+        p_box += 1
+    if "Person" in im and "Knife" in im:
+        pk_label += 1
+    for l in im:
+        co[l] += 1
+print("  images couteau (train)          :", total)
+print("  avec Person IMAGE-LEVEL         :", p_label)
+print("  avec Person BOX                 :", p_box)
+print("  avec Person+Knife IMAGE-LEVEL   :", pk_label)
+print("  co-labels image-level (top15)   :", co.most_common(15))

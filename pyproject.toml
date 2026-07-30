@@ -23,6 +23,7 @@ dependencies = [
     "kagglehub>=1.0.2",
     "datasets>=5.0.0",
     "opencv-python>=5.0.0.93",
+    "opendatalab>=0.0.10",
 ]
 
 [project.optional-dependencies]
