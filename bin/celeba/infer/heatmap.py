@@ -42,7 +42,7 @@ IMAGE_INDEX_DEFAULT = 0
 
 # Sorties ici. En mode image seule, {idx} est remplacé. En mode --n_per_class,
 # un sous-dossier par banque est créé, fichiers <hat|good>_idx<N>.png.
-OUTPUT_PATH = "results/celeba/heatmaps/overlay_idx{idx}.png"
+OUTPUT_PATH = os.environ.get("HEATMAP_OUTPUT_PATH", "results/celeba/heatmaps/overlay_idx{idx}.png")
 
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
