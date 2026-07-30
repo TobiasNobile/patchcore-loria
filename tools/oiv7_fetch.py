@@ -79,12 +79,17 @@ def _records_from(datasets, keep_anomaly):
             labels = {d.label for d in dets}
             has_person = "Person" in labels
             has_knife = "Knife" in labels
-            if not has_person:
-                continue
-            if keep_anomaly and not has_knife:
-                continue
-            if (not keep_anomaly) and has_knife:
-                continue
+            if keep_anomaly:
+                # OIV7 annote PAR CLASSE : les images "Knife" ne portent pas les
+                # boîtes "Person" (téléchargement class-scoped), même si une
+                # personne est visible -> exiger person donnerait 0 anomalie. On
+                # relâche : anomalie = couteau présent (ces images sont en pratique
+                # des personnes tenant un couteau). Déviation assumée vs COCO.
+                if not has_knife:
+                    continue
+            else:
+                if not has_person or has_knife:
+                    continue
             path = sample.filepath
             key = os.path.basename(path)
             if key in seen:
