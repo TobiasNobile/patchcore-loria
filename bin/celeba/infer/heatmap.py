@@ -34,7 +34,9 @@ LOGGER = logging.getLogger(__name__)
 # CONFIG — à éditer avant de lancer.
 # --------------------------------------------------------------------------- #
 # Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
-BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
+BANK_DIR = os.environ.get(
+    "HIST_BANK_DIR", "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
+)
 
 # Mode image seule : index dans le split TEST équilibré (839 hat + 839 no-hat).
 # Ignoré si --n_per_class > 0.
