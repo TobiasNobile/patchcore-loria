@@ -279,6 +279,41 @@ Les variables d'environnement disponibles (tailles, pourcentages, nombre de
 voisins, emplacement des banques, reprise) sont documentées en tête de
 `sweep_histograms.sh`.
 
+### Balayage de couches (single-layer, ts=20000, coreset 5 %, 3 NN)
+
+Une seule couche du backbone à la fois. WideResNet50 est un ResNet : couches
+disponibles `layer1`..`layer4` (pas de layer5) ; la résolution des patches est
+celle de la couche extraite.
+
+| Couche | Résolution | AUROC | Jaccard |
+| --- | --- | --- | --- |
+| layer2 | 28×28 | 0,760 | 0,431 |
+| layer3 | 14×14 | **0,859** | **0,270** |
+| layer4 | 7×7   | 0,694 | 0,492 |
+
+Courbe en cloche : `layer3` (features mid-level) sépare le mieux no-hat / hat ;
+`layer2` est trop fin (sensible à la texture), `layer4` trop grossier (49 patches,
+perd la localisation du chapeau). Reproduction :
+`FIT_LAYERS=layer3 FIT_TRAIN_SUBSET=20000 bash bin/celeba/fit_and_score.sh`.
+
+## COCO — détection « personne + couteau »
+
+Même protocole one-class (banque sur personnes sans couteau, test personne avec
+couteau), coreset 5 %, 3 NN, backbone WideResNet50. Balayage couches × taille de
+banque (AUROC) :
+
+| Couches | 20 000 | 40 000 | 50 000 |
+| --- | --- | --- | --- |
+| layer2 seul | 0,612 | 0,621 | 0,605 |
+| layer3 seul | 0,636 | 0,837\* | 0,627 |
+| layer2 + layer3 | 0,715 | 0,595 | 0,588 |
+
+Les scores restent faibles (~0,6) : les scènes COCO sont très hétérogènes et
+PatchCore score surtout la nouveauté de scène plutôt que le petit couteau. Le
+0,837 (\*layer3, 40k) est un point non-monotone (variance : layer3 retombe à ~0,63
+en 20k et 50k), à ne pas sur-interpréter. Contraste avec CelebA (visages alignés,
+AUROC 0,86) : PatchCore exige un « normal » homogène, que COCO n'offre pas.
+
 ## COCO + Open Images V7 — dataset fusionné « personne + couteau »
 
 Même protocole one-class que CelebA, mais l'anomalie est un couteau tenu par une
