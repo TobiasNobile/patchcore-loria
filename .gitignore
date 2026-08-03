@@ -17,3 +17,6 @@ results
 models/celeba/
 models/atr/
 models/sohas/
+models/coco/
+models/merged/
+models/weapon/
