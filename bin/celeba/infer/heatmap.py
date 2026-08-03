@@ -50,8 +50,11 @@ GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
 # None = autoscale par image : montre la structure, incomparable entre images.
 # Deux bornes fixes (p.ex. 0 et 10) = échelle commune pour un lot d'images.
-HEATMAP_VMIN = 0
-HEATMAP_VMAX = 10
+# Bornes de couleur du heatmap (scores = distances L2, échelle dépendante de la
+# couche : ~7 en layer3, ~15 en layer2, ~190 en layer4). Surchargeables par env
+# HEATMAP_VMIN / HEATMAP_VMAX pour recaler par couche.
+HEATMAP_VMIN = float(os.environ.get("HEATMAP_VMIN", "0"))
+HEATMAP_VMAX = float(os.environ.get("HEATMAP_VMAX", "10"))
 HEATMAP_ALPHA = 0.5
 
 BATCH_SIZE = 8
