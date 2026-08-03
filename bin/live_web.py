@@ -48,12 +48,12 @@ LOGGER = logging.getLogger(__name__)
 MODELS_ROOT = "models"
 
 
-def overlay_heatmap(preview_rgb, heatmap):
-    """Vignette + heatmap jet, en BGR — le render() de live_camera sans l'ATH,
-    que la page affiche déjà en HTML. Échelle fixe : un autoscale par image
-    ferait clignoter la heatmap et interdirait de comparer deux frames."""
+def overlay_heatmap(preview_rgb, heatmap, vmin, vmax):
+    """Vignette + heatmap jet, en BGR. L'échelle vmin/vmax est réglable en direct
+    depuis la page (pur affichage, aucun effet sur les scores) : indispensable car
+    l'échelle des scores dépend de la couche (~10 layer3, ~20 layer2, ~260 layer4)."""
     normalized = np.clip(
-        (heatmap - HEATMAP_VMIN) / max(HEATMAP_VMAX - HEATMAP_VMIN, 1e-6), 0, 1
+        (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
     colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
@@ -95,10 +95,21 @@ class Runner:
             "error": None,
             "params": None,
         }
+        # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
+        self._live = {"zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX}
 
     def state(self):
         with self._lock:
-            return dict(self._state)
+            s = dict(self._state)
+            s["live"] = dict(self._live)
+            return s
+
+    def update_live(self, **fields):
+        """Zoom / échelle couleur, ajustables pendant que la boucle tourne."""
+        with self._lock:
+            for k in ("zoom", "vmin", "vmax"):
+                if fields.get(k) is not None:
+                    self._live[k] = float(fields[k])
 
     def _update(self, **fields):
         with self._lock:
@@ -122,6 +133,12 @@ class Runner:
                 running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
                 verdict=None, error=None, params=params,
             )
+            # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
+            self._live = {
+                "zoom": float(params.get("zoom", 1.0)),
+                "vmin": HEATMAP_VMIN,
+                "vmax": float(params.get("vmax", HEATMAP_VMAX)),
+            }
         self._wake.set()
         return True, None
 
@@ -177,7 +194,10 @@ class Runner:
                     self._update(error="Fin du flux.")
                     break
 
-                tensor, preview = preprocess(frame, transform, params["zoom"])
+                with self._lock:
+                    zoom = self._live["zoom"]
+                    vmin, vmax = self._live["vmin"], self._live["vmax"]
+                tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
                     t0 = time.perf_counter()
@@ -196,7 +216,7 @@ class Runner:
                 # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
                 # et garde la dernière heatmap entre deux inférences.
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, heatmap),
+                    ".jpg", overlay_heatmap(preview, heatmap, vmin, vmax),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -267,8 +287,11 @@ PAGE = """<!doctype html>
     <label for="stride">Stride<small>ne score qu'une frame sur N</small></label>
     <input id="stride" name="stride" type="number" min="1" step="1" value="1">
 
-    <label for="zoom">Zoom<small>recadrage centré (2 = moitié)</small></label>
-    <input id="zoom" name="zoom" type="number" min="1" step="0.1" value="1">
+    <label for="zoom">Zoom<small>recadrage centré · réglable en direct</small></label>
+    <input id="zoom" name="zoom" class="live" type="number" min="1" step="0.1" value="1">
+
+    <label for="vmax">Échelle couleur<small>vmax heatmap · en direct · l2≈20 l3≈10 l4≈260</small></label>
+    <input id="vmax" name="vmax" class="live" type="number" min="1" step="1" value="10">
 
     <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
     <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
@@ -296,6 +319,7 @@ function readParams() {
     source: document.getElementById('source').value,
     stride: parseInt(document.getElementById('stride').value || '1', 10),
     zoom: parseFloat(document.getElementById('zoom').value || '1'),
+    vmax: parseFloat(document.getElementById('vmax').value || '10'),
     threshold: t === '' ? null : parseFloat(t),
     loop: document.getElementById('loop').checked,
   };
@@ -315,6 +339,13 @@ form.addEventListener('submit', async (e) => {
   refresh();
 });
 stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh(); });
+
+// Zoom et vmax : réglables À CHAUD, envoyés au serveur sans redémarrer la boucle.
+['zoom', 'vmax'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    post('/api/update', {[id]: parseFloat(document.getElementById(id).value)});
+  });
+});
 
 function apply(s) {
   // Le flux MJPEG se termine avec la boucle : on rebranche le <img> à chaque
@@ -336,9 +367,10 @@ function apply(s) {
   document.getElementById('meta').textContent = s.running
     ? `${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames` : '';
   document.getElementById('error').textContent = s.error || '';
-  // Paramètres figés tant que la boucle tourne : les changer à chaud rendrait
-  // les scores incomparables d'une frame à l'autre.
-  fields.forEach(f => f.disabled = s.running);
+  // Paramètres figés tant que la boucle tourne (sauf ceux marqués .live : zoom
+  // et vmax, ajustables à chaud). Changer les autres rendrait les scores
+  // incomparables d'une frame à l'autre.
+  fields.forEach(f => { if (!f.classList.contains('live')) f.disabled = s.running; });
   startBtn.disabled = s.running;
   stopBtn.disabled = !s.running;
 }
@@ -420,6 +452,7 @@ class Handler(BaseHTTPRequestHandler):
                     "source": str(params.get("source", "0")),
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": float(params.get("zoom") or 1.0),
+                    "vmax": float(params.get("vmax") or HEATMAP_VMAX),
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
                     "loop": bool(params.get("loop")),
@@ -434,6 +467,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "error": err})
         elif self.path == "/api/stop":
             RUNNER.stop()
+            self._json({"ok": True})
+        elif self.path == "/api/update":
+            try:
+                p = json.loads(raw)
+            except ValueError:
+                p = {}
+            RUNNER.update_live(zoom=p.get("zoom"), vmin=p.get("vmin"), vmax=p.get("vmax"))
             self._json({"ok": True})
         else:
             self._send(404, "not found", "text/plain")
