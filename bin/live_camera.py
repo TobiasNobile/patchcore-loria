@@ -109,10 +109,10 @@ def preprocess(frame_bgr, transform, zoom):
     return tensor.unsqueeze(0), np.asarray(preview)
 
 
-def render(preview_rgb, heatmap, score, fps, ms, threshold, paused):
+def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
     """Superpose la heatmap et l'ATH sur la vignette. Renvoie une image BGR."""
     normalized = np.clip(
-        (heatmap - HEATMAP_VMIN) / max(HEATMAP_VMAX - HEATMAP_VMIN, 1e-6), 0, 1
+        (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
     colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
@@ -163,7 +163,12 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused):
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
 @click.option("--loop/--no-loop", default=False, show_default=True,
               help="Rejouer en boucle une source fichier (sans effet sur une caméra).")
-def main(bank_dir, source, stride, zoom, threshold, flip, loop):
+@click.option("--vmax", default=HEATMAP_VMAX, show_default=True,
+              help="Borne haute de couleur du heatmap. L'échelle des scores dépend "
+                   "de la couche : ~10 (layer3), ~20 (layer2), ~260 (layer4).")
+@click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
+              help="Borne basse de couleur du heatmap.")
+def main(bank_dir, source, stride, zoom, threshold, flip, loop, vmax, vmin):
     device = patchcore.utils.set_torch_device(GPU)
 
     patchcore_instance, fit_config = patchcore.banks.load_bank(
@@ -226,7 +231,7 @@ def main(bank_dir, source, stride, zoom, threshold, flip, loop):
             last_tick = now
             frame_index += 1
 
-            overlay = render(preview, heatmap, score, fps, infer_ms, threshold, paused)
+            overlay = render(preview, heatmap, score, fps, infer_ms, threshold, paused, vmin, vmax)
             cv2.imshow("PatchCore live", overlay)
 
             key = cv2.waitKey(1) & 0xFF
