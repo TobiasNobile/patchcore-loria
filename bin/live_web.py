@@ -86,6 +86,7 @@ class Runner:
         self._stop = threading.Event()
         self._jpeg = None  # dernière vignette encodée, servie en MJPEG
         self._last_preview = None  # dernière frame PROPRE (RGB), pour la capture
+        self._fit_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
             "running": False,
             "score": None,
@@ -120,11 +121,16 @@ class Runner:
             preview = None if self._last_preview is None else self._last_preview.copy()
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
+            meta = self._fit_meta or {}
         if preview is None:
             return None
         bank = params["bank_dir"] if params else ""
         dataset = os.path.basename(os.path.dirname(os.path.normpath(bank))) or "live"
-        out_dir = os.path.join("results", dataset, "captures")
+        # Rangé par dataset / coreset / couche (lus du fit_config de la banque).
+        out_dir = os.path.join(
+            "results", dataset, "captures",
+            meta.get("coreset", "p?"), meta.get("layer", "l?"),
+        )
         os.makedirs(out_dir, exist_ok=True)
         stamp = int(time.time() * 1000)
         clean_path = os.path.join(out_dir, "cap_{}.png".format(stamp))
@@ -187,6 +193,15 @@ class Runner:
             )
             patchcore.utils.fix_seeds(fit_config["seed"])
             transform = build_transform(fit_config)
+            with self._lock:
+                self._fit_meta = {
+                    "coreset": "identity" if fit_config.get("sampler_name") == "identity"
+                               else "p{:g}".format(fit_config.get("coreset_pct", 0)),
+                    "layer": "-".join(
+                        l.replace("layer", "l")
+                        for l in fit_config.get("layers_to_extract_from", ["layer2", "layer3"])
+                    ),
+                }
 
             source = params["source"]
             capture = cv2.VideoCapture(int(source) if source.isdigit() else source)
