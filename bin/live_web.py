@@ -226,6 +226,8 @@ class Runner:
                     self._update(error="Fin du flux.")
                     break
 
+                frame = cv2.flip(frame, 1)  # effet miroir, plus naturel face à la webcam
+
                 with self._lock:
                     zoom = self._live["zoom"]
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
