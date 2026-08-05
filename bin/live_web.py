@@ -84,8 +84,7 @@ class Runner:
         self._pending = None
         self._wake = threading.Event()
         self._stop = threading.Event()
-        self._jpeg = None  # dernière vignette encodée, servie en MJPEG
-        self._last_preview = None  # dernière frame PROPRE (RGB), pour la capture
+        self._jpeg = None  # dernière vignette encodée (overlay), servie en MJPEG et capturée
         self._fit_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
             "running": False,
@@ -114,15 +113,13 @@ class Runner:
                     self._live[k] = float(fields[k])
 
     def snapshot(self):
-        """Enregistre la frame courante dans results/<dataset>/captures/ :
-        - cap_<ts>.png : frame PROPRE (224, telle que le réseau la voit) -> image de test ;
-        - cap_<ts>_heatmap.jpg : la même AVEC la heatmap (ce qui est affiché)."""
+        """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
+        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>.jpg."""
         with self._lock:
-            preview = None if self._last_preview is None else self._last_preview.copy()
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
             meta = self._fit_meta or {}
-        if preview is None:
+        if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
         dataset = os.path.basename(os.path.dirname(os.path.normpath(bank))) or "live"
@@ -132,13 +129,10 @@ class Runner:
             meta.get("coreset", "p?"), meta.get("layer", "l?"),
         )
         os.makedirs(out_dir, exist_ok=True)
-        stamp = int(time.time() * 1000)
-        clean_path = os.path.join(out_dir, "cap_{}.png".format(stamp))
-        cv2.imwrite(clean_path, cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
-        if jpeg:
-            with open(os.path.join(out_dir, "cap_{}_heatmap.jpg".format(stamp)), "wb") as fh:
-                fh.write(jpeg)
-        return clean_path
+        path = os.path.join(out_dir, "cap_{}.jpg".format(int(time.time() * 1000)))
+        with open(path, "wb") as fh:
+            fh.write(jpeg)
+        return path
 
     def _update(self, **fields):
         with self._lock:
@@ -260,7 +254,6 @@ class Runner:
                 if ok_enc:
                     with self._lock:
                         self._jpeg = buf.tobytes()
-                        self._last_preview = preview
 
                 now = time.perf_counter()
                 # Lissage exponentiel : le fps brut saute trop pour être lu.
@@ -394,7 +387,7 @@ stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh
 snapBtn.addEventListener('click', async () => {
   const res = await post('/api/snapshot');
   document.getElementById('capture').textContent =
-    res && res.ok ? 'Enregistré : ' + res.path + '  (+ _heatmap.jpg)'
+    res && res.ok ? 'Enregistré : ' + res.path
                   : ((res && res.error) || 'échec de la capture');
 });
 
