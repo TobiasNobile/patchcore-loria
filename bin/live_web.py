@@ -290,8 +290,14 @@ PAGE = """<!doctype html>
   label { color:#555; }
   label small { display:block; color:#aaa; font-size:11px; }
   #cam { width:320px; height:320px; object-fit:cover; border-radius:6px; background:#f5f5f5;
-         image-rendering:pixelated; }
+         image-rendering:pixelated; display:block; }
   #cam[hidden] { display:none; }
+  #camwrap { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  #camframe { position:relative; width:320px; height:320px; }
+  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none;
+           border-radius:6px; }
+  #flash.shoot { animation: shutter .3s ease-out; }
+  @keyframes shutter { from { opacity:.85; } to { opacity:0; } }
   input, select { font:inherit; padding:6px 8px; border:1px solid #ccc; border-radius:4px;
                   background:#fff; width:100%; box-sizing:border-box; }
   input:disabled, select:disabled { background:#f5f5f5; color:#888; }
@@ -301,11 +307,18 @@ PAGE = """<!doctype html>
   button.secondary { background:#fff; color:#111; }
   button:disabled { opacity:.35; cursor:default; }
   #error { color:#c01919; font-size:12px; min-height:16px; }
-  #capture { grid-column:1/-1; color:#0a7a2f; font-size:12px; min-height:16px; }
+  #capture { color:#0a7a2f; font-size:12px; min-height:16px; text-align:center; }
 </style>
 </head>
 <body>
-  <img id="cam" hidden alt="">
+  <div id="camwrap">
+    <div id="camframe">
+      <img id="cam" hidden alt="">
+      <div id="flash"></div>
+    </div>
+    <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
+    <div id="capture"></div>
+  </div>
   <div id="score">—</div>
   <div id="verdict" class="idle">arrêté</div>
   <div id="meta"></div>
@@ -335,10 +348,8 @@ PAGE = """<!doctype html>
     <div class="row">
       <button id="start" type="submit">Démarrer</button>
       <button id="stop" type="button" class="secondary" disabled>Arrêter</button>
-      <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
       <span id="error"></span>
     </div>
-    <div id="capture"></div>
   </form>
 
 <script>
@@ -386,6 +397,11 @@ stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh
 // Capture de la frame propre (image de test), pendant que la caméra tourne.
 snapBtn.addEventListener('click', async () => {
   const res = await post('/api/snapshot');
+  if (res && res.ok) {
+    // Effet obturateur : relance l'animation même en clics rapides (reflow).
+    const fl = document.getElementById('flash');
+    fl.classList.remove('shoot'); void fl.offsetWidth; fl.classList.add('shoot');
+  }
   document.getElementById('capture').textContent =
     res && res.ok ? 'Enregistré : ' + res.path
                   : ((res && res.error) || 'échec de la capture');
