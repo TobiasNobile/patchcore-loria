@@ -32,7 +32,6 @@ from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
     FAISS_ON_GPU,
     GPU,
-    HEATMAP_ALPHA,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
     SMOOTH_WINDOW,
@@ -47,17 +46,31 @@ LOGGER = logging.getLogger(__name__)
 
 MODELS_ROOT = "models"
 
+# Exposant du canal alpha, pas le poids de mélange de live_camera : ici l'opacité
+# vaut normalized ** HEATMAP_ALPHA (voir overlay_heatmap).
+HEATMAP_ALPHA = 4.0
+# Au-delà, n**alpha ne bouge plus visuellement (tout est déjà écrasé à 0).
+HEATMAP_ALPHA_MAX = 16.0
 
-def overlay_heatmap(preview_rgb, heatmap, vmin, vmax):
+
+def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     """Vignette + heatmap jet, en BGR. L'échelle vmin/vmax est réglable en direct
     depuis la page (pur affichage, aucun effet sur les scores) : indispensable car
-    l'échelle des scores dépend de la couche (~10 layer3, ~20 layer2, ~260 layer4)."""
+    l'échelle des scores dépend de la couche (~10 layer3, ~20 layer2, ~260 layer4).
+
+    Le canal alpha vaut normalized ** alpha, par pixel : `alpha` sert d'exposant,
+    pas de poids de mélange. Il tord la rampe en marche — 1 sur l'anomalie, 0 sur
+    le normal, qui reste donc l'image nue. Plus `alpha` monte, plus la coupure est
+    franche (alpha=1 : rampe linéaire ; alpha=0 : heatmap opaque partout)."""
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
     colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    return cv2.addWeighted(colored, HEATMAP_ALPHA, frame, 1 - HEATMAP_ALPHA, 0)
+    # (H, W, 1) diffusé sur les 3 canaux BGR. normalized ∈ [0, 1] et alpha ≥ 0
+    # gardent la puissance dans [0, 1] : pas de clip nécessaire.
+    a = (normalized.astype(np.float32) ** alpha)[:, :, None]
+    return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
 def find_banks():
@@ -97,7 +110,10 @@ class Runner:
             "params": None,
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
-        self._live = {"zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX}
+        self._live = {
+            "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
+            "alpha": HEATMAP_ALPHA,
+        }
 
     def state(self):
         with self._lock:
@@ -106,11 +122,17 @@ class Runner:
             return s
 
     def update_live(self, **fields):
-        """Zoom / échelle couleur, ajustables pendant que la boucle tourne."""
+        """Zoom / échelle couleur / opacité, ajustables pendant que la boucle tourne."""
         with self._lock:
             for k in ("zoom", "vmin", "vmax"):
                 if fields.get(k) is not None:
                     self._live[k] = float(fields[k])
+            if fields.get("alpha") is not None:
+                # Exposant : un négatif inverserait la rampe (le normal deviendrait
+                # opaque) et ferait sortir l'alpha de [0, 1].
+                self._live["alpha"] = min(
+                    max(float(fields["alpha"]), 0.0), HEATMAP_ALPHA_MAX
+                )
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
@@ -161,6 +183,7 @@ class Runner:
                 "zoom": float(params.get("zoom", 1.0)),
                 "vmin": HEATMAP_VMIN,
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
+                "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
             }
         self._wake.set()
         return True, None
@@ -231,6 +254,7 @@ class Runner:
                 with self._lock:
                     zoom = self._live["zoom"]
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
+                    alpha = self._live["alpha"]
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
@@ -250,7 +274,7 @@ class Runner:
                 # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
                 # et garde la dernière heatmap entre deux inférences.
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, heatmap, vmin, vmax),
+                    ".jpg", overlay_heatmap(preview, heatmap, vmin, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -303,6 +327,10 @@ PAGE = """<!doctype html>
   input, select { font:inherit; padding:6px 8px; border:1px solid #ccc; border-radius:4px;
                   background:#fff; width:100%; box-sizing:border-box; }
   input:disabled, select:disabled { background:#f5f5f5; color:#888; }
+  .slider { display:flex; align-items:center; gap:10px; }
+  .slider input[type=range] { padding:0; border:none; background:none; }
+  .slider output { color:#888; font-size:12px; font-variant-numeric:tabular-nums;
+                   min-width:30px; text-align:right; }
   .row { grid-column:1/-1; display:flex; gap:12px; align-items:center; }
   button { font:inherit; padding:8px 20px; border:1px solid #111; border-radius:4px;
            background:#111; color:#fff; cursor:pointer; }
@@ -341,6 +369,12 @@ PAGE = """<!doctype html>
     <label for="vmax">Échelle couleur<small>vmax heatmap · en direct · l2≈20 l3≈10 l4≈260</small></label>
     <input id="vmax" name="vmax" class="live" type="number" min="1" step="1" value="10">
 
+    <label for="alpha">Alpha<small>opacité = n^α · haut = le normal disparaît · en direct</small></label>
+    <div class="slider">
+      <input id="alpha" name="alpha" class="live" type="range" min="0" max="16" step="0.25" value="4">
+      <output id="alphaval" for="alpha">4.00</output>
+    </div>
+
     <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
     <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
 
@@ -369,6 +403,7 @@ function readParams() {
     stride: parseInt(document.getElementById('stride').value || '1', 10),
     zoom: parseFloat(document.getElementById('zoom').value || '1'),
     vmax: parseFloat(document.getElementById('vmax').value || '10'),
+    alpha: parseFloat(document.getElementById('alpha').value),
     threshold: t === '' ? null : parseFloat(t),
     loop: document.getElementById('loop').checked,
   };
@@ -389,12 +424,17 @@ form.addEventListener('submit', async (e) => {
 });
 stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh(); });
 
-// Zoom et vmax : réglables À CHAUD, envoyés au serveur sans redémarrer la boucle.
-['zoom', 'vmax'].forEach(id => {
+// Zoom, vmax et alpha : réglables À CHAUD, envoyés sans redémarrer la boucle.
+['zoom', 'vmax', 'alpha'].forEach(id => {
   document.getElementById(id).addEventListener('input', () => {
     post('/api/update', {[id]: parseFloat(document.getElementById(id).value)});
   });
 });
+
+const alphaInput = document.getElementById('alpha');
+const alphaOut = document.getElementById('alphaval');
+alphaInput.addEventListener('input',
+  () => { alphaOut.textContent = parseFloat(alphaInput.value).toFixed(2); });
 
 // Capture de la frame propre (image de test), pendant que la caméra tourne.
 snapBtn.addEventListener('click', async () => {
@@ -429,8 +469,8 @@ function apply(s) {
   document.getElementById('meta').textContent = s.running
     ? `${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames` : '';
   document.getElementById('error').textContent = s.error || '';
-  // Paramètres figés tant que la boucle tourne (sauf ceux marqués .live : zoom
-  // et vmax, ajustables à chaud). Changer les autres rendrait les scores
+  // Paramètres figés tant que la boucle tourne (sauf ceux marqués .live : zoom,
+  // vmax et alpha, ajustables à chaud). Changer les autres rendrait les scores
   // incomparables d'une frame à l'autre.
   fields.forEach(f => { if (!f.classList.contains('live')) f.disabled = s.running; });
   startBtn.disabled = s.running;
@@ -516,6 +556,10 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": float(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
+                    # `or` interdit ici : alpha=0 est une valeur voulue (heatmap pleine).
+                    "alpha": HEATMAP_ALPHA if params.get("alpha") is None
+                             else min(max(float(params["alpha"]), 0.0),
+                                      HEATMAP_ALPHA_MAX),
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
                     "loop": bool(params.get("loop")),
@@ -536,7 +580,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = json.loads(raw)
             except ValueError:
                 p = {}
-            RUNNER.update_live(zoom=p.get("zoom"), vmin=p.get("vmin"), vmax=p.get("vmax"))
+            RUNNER.update_live(
+                zoom=p.get("zoom"), vmin=p.get("vmin"), vmax=p.get("vmax"),
+                alpha=p.get("alpha"),
+            )
             self._json({"ok": True})
         elif self.path == "/api/snapshot":
             path = RUNNER.snapshot()
