@@ -47,7 +47,8 @@ LOGGER = logging.getLogger(__name__)
 MODELS_ROOT = "models"
 
 # Exposant du canal alpha, pas le poids de mélange de live_camera : ici l'opacité
-# vaut normalized ** HEATMAP_ALPHA (voir overlay_heatmap).
+# vaut normalized ** HEATMAP_ALPHA (voir overlay_heatmap). Les deux constantes
+# sont injectées dans la page, qui en déduit la course de son curseur 0→1.
 HEATMAP_ALPHA = 4.0
 # Au-delà, n**alpha ne bouge plus visuellement (tout est déjà écrasé à 0).
 HEATMAP_ALPHA_MAX = 16.0
@@ -330,7 +331,7 @@ PAGE = """<!doctype html>
   .slider { display:flex; align-items:center; gap:10px; }
   .slider input[type=range] { padding:0; border:none; background:none; }
   .slider output { color:#888; font-size:12px; font-variant-numeric:tabular-nums;
-                   min-width:30px; text-align:right; }
+                   min-width:86px; text-align:right; white-space:nowrap; }
   .row { grid-column:1/-1; display:flex; gap:12px; align-items:center; }
   button { font:inherit; padding:8px 20px; border:1px solid #111; border-radius:4px;
            background:#111; color:#fff; cursor:pointer; }
@@ -369,10 +370,10 @@ PAGE = """<!doctype html>
     <label for="vmax">Échelle couleur<small>vmax heatmap · en direct · l2≈20 l3≈10 l4≈260</small></label>
     <input id="vmax" name="vmax" class="live" type="number" min="1" step="1" value="10">
 
-    <label for="alpha">Alpha<small>opacité = n^α · haut = le normal disparaît · en direct</small></label>
+    <label for="alpha">Alpha<small>0 = rampe · 1 = seul l'anormal reste · en direct</small></label>
     <div class="slider">
-      <input id="alpha" name="alpha" class="live" type="range" min="0" max="16" step="0.25" value="4">
-      <output id="alphaval" for="alpha">4.00</output>
+      <input id="alpha" name="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.5">
+      <output id="alphaval" for="alpha">0.50 · n^4.0</output>
     </div>
 
     <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
@@ -395,6 +396,16 @@ const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const snapBtn = document.getElementById('snap');
 
+// Le curseur alpha va de 0 à 1, l'exposant envoyé au serveur de 1 à ALPHA_EXP_MAX,
+// en progression géométrique : un cran de curseur vaut un facteur constant sur
+// l'exposant, donc un réglage régulier à l'œil. Linéaire, les valeurs utiles
+// (1 à 6) seraient tassées dans le premier tiers de la course.
+const ALPHA_EXP_MAX = __ALPHA_EXP_MAX__;      // injectés depuis les constantes
+const ALPHA_EXP_DEFAULT = __ALPHA_EXP_DEF__;  // Python, seule source de vérité
+const alphaInput = document.getElementById('alpha');
+const alphaOut = document.getElementById('alphaval');
+const alphaExp = () => Math.pow(ALPHA_EXP_MAX, parseFloat(alphaInput.value));
+
 function readParams() {
   const t = document.getElementById('threshold').value;
   return {
@@ -403,7 +414,7 @@ function readParams() {
     stride: parseInt(document.getElementById('stride').value || '1', 10),
     zoom: parseFloat(document.getElementById('zoom').value || '1'),
     vmax: parseFloat(document.getElementById('vmax').value || '10'),
-    alpha: parseFloat(document.getElementById('alpha').value),
+    alpha: alphaExp(),  // le serveur attend l'exposant, pas la position du curseur
     threshold: t === '' ? null : parseFloat(t),
     loop: document.getElementById('loop').checked,
   };
@@ -425,16 +436,23 @@ form.addEventListener('submit', async (e) => {
 stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh(); });
 
 // Zoom, vmax et alpha : réglables À CHAUD, envoyés sans redémarrer la boucle.
-['zoom', 'vmax', 'alpha'].forEach(id => {
+['zoom', 'vmax'].forEach(id => {
   document.getElementById(id).addEventListener('input', () => {
     post('/api/update', {[id]: parseFloat(document.getElementById(id).value)});
   });
 });
 
-const alphaInput = document.getElementById('alpha');
-const alphaOut = document.getElementById('alphaval');
-alphaInput.addEventListener('input',
-  () => { alphaOut.textContent = parseFloat(alphaInput.value).toFixed(2); });
+// À part : l'API parle en exposant, le curseur en 0→1.
+function alphaRender() {
+  const e = alphaExp();
+  alphaOut.textContent =
+    parseFloat(alphaInput.value).toFixed(2) + ' · n^' + e.toFixed(1);
+  return e;
+}
+alphaInput.addEventListener('input', () => post('/api/update', {alpha: alphaRender()}));
+// Position de départ = mappage inverse du défaut serveur.
+alphaInput.value = Math.log(ALPHA_EXP_DEFAULT) / Math.log(ALPHA_EXP_MAX);
+alphaRender();
 
 // Capture de la frame propre (image de test), pendant que la caméra tourne.
 snapBtn.addEventListener('click', async () => {
@@ -507,7 +525,12 @@ class Handler(BaseHTTPRequestHandler):
             options = "".join(
                 '<option value="{0}">{0}</option>'.format(b) for b in find_banks()
             ) or '<option value="">aucune banque dans models/</option>'
-            self._send(200, PAGE.replace("__BANKS__", options), "text/html; charset=utf-8")
+            page = (
+                PAGE.replace("__BANKS__", options)
+                .replace("__ALPHA_EXP_MAX__", repr(HEATMAP_ALPHA_MAX))
+                .replace("__ALPHA_EXP_DEF__", repr(HEATMAP_ALPHA))
+            )
+            self._send(200, page, "text/html; charset=utf-8")
         elif self.path == "/api/state":
             self._json(RUNNER.state())
         elif self.path.startswith("/stream.mjpg"):
