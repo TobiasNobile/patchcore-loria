@@ -138,11 +138,11 @@ class Runner:
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>_a<alpha>_v<vmax>.jpg.
+        results/<dataset>/captures/<coreset>/<layer>/v<vmax>/cap_<ts>_a<alpha>.jpg.
 
-        Alpha et vmax sont dans le nom car ils changent l'image enregistrée sans
-        laisser d'autre trace, et ne se lisent pas l'un sans l'autre : vmax place
-        le normal sur l'échelle, alpha décide à quel point il est écrasé."""
+        vmax passe en dossier comme le coreset et la couche : on compare une série
+        à échelle constante. Alpha reste dans le nom, il varie en continu d'une
+        capture à l'autre et ferait autant de dossiers que de captures."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
@@ -152,18 +152,19 @@ class Runner:
             return None
         bank = params["bank_dir"] if params else ""
         dataset = os.path.basename(os.path.dirname(os.path.normpath(bank))) or "live"
-        # Rangé par dataset / coreset / couche (lus du fit_config de la banque).
+        # Rangé par dataset / coreset / couche (lus du fit_config de la banque),
+        # puis par vmax.
         out_dir = os.path.join(
             "results", dataset, "captures",
             meta.get("coreset", "p?"), meta.get("layer", "l?"),
+            "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
         # Pour alpha : l'exposant, pas la position du curseur, c'est lui qui décrit
         # le rendu. Les deux peuvent avoir un frame de retard sur la dernière image
         # encodée si un curseur vient de bouger — sans conséquence à 30 fps.
         path = os.path.join(
-            out_dir,
-            "cap_{}_a{:.2f}_v{:g}.jpg".format(int(time.time() * 1000), alpha, vmax),
+            out_dir, "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha)
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
