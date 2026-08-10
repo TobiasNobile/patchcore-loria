@@ -138,11 +138,12 @@ class Runner:
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<dataset>/captures/<coreset>/<layer>/v<vmax>/cap_<ts>_a<alpha>.jpg.
+        results/<dataset>/captures/<layer>/<coreset>/v<vmax>/cap_<ts>_s<curseur>_a<exposant>.jpg.
 
-        vmax passe en dossier comme le coreset et la couche : on compare une série
-        à échelle constante. Alpha reste dans le nom, il varie en continu d'une
-        capture à l'autre et ferait autant de dossiers que de captures."""
+        Ce qui définit une série est un dossier (couche, coreset, échelle) ; ce qui
+        varie d'une capture à l'autre est dans le nom. Le curseur `s` et l'exposant
+        `a` sont les deux faces du même réglage — s pour retrouver la position à
+        l'écran, a pour la courbe réellement appliquée."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
@@ -152,19 +153,25 @@ class Runner:
             return None
         bank = params["bank_dir"] if params else ""
         dataset = os.path.basename(os.path.dirname(os.path.normpath(bank))) or "live"
-        # Rangé par dataset / coreset / couche (lus du fit_config de la banque),
+        # Rangé par dataset / couche / coreset (lus du fit_config de la banque),
         # puis par vmax.
         out_dir = os.path.join(
             "results", dataset, "captures",
-            meta.get("coreset", "p?"), meta.get("layer", "l?"),
+            meta.get("layer", "l?"), meta.get("coreset", "p?"),
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # Pour alpha : l'exposant, pas la position du curseur, c'est lui qui décrit
-        # le rendu. Les deux peuvent avoir un frame de retard sur la dernière image
+        # La page n'envoie que l'exposant ; la position du curseur s'en déduit en
+        # inversant son mappage (alpha = MAX * s²), plutôt que de faire circuler
+        # deux valeurs qui pourraient se désynchroniser.
+        slider = (alpha / HEATMAP_ALPHA_MAX) ** 0.5 if HEATMAP_ALPHA_MAX else 0.0
+        # Les valeurs peuvent avoir un frame de retard sur la dernière image
         # encodée si un curseur vient de bouger — sans conséquence à 30 fps.
         path = os.path.join(
-            out_dir, "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha)
+            out_dir,
+            "cap_{}_s{:.2f}_a{:.2f}.jpg".format(
+                int(time.time() * 1000), slider, alpha
+            ),
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
