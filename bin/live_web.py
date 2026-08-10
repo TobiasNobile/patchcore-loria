@@ -137,11 +137,16 @@ class Runner:
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>.jpg."""
+        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>_a<alpha>.jpg.
+
+        L'alpha est dans le nom car il change l'image enregistrée sans laisser
+        d'autre trace : deux captures de la même scène au même seuil peuvent
+        n'avoir plus rien à voir selon l'exposant utilisé."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
             meta = self._fit_meta or {}
+            alpha = self._live["alpha"]
         if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
@@ -152,7 +157,12 @@ class Runner:
             meta.get("coreset", "p?"), meta.get("layer", "l?"),
         )
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, "cap_{}.jpg".format(int(time.time() * 1000)))
+        # L'exposant, pas la position du curseur : c'est lui qui décrit le rendu.
+        # Il peut avoir un frame de retard sur la dernière image encodée si le
+        # curseur vient de bouger — sans conséquence à 30 fps.
+        path = os.path.join(
+            out_dir, "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha)
+        )
         with open(path, "wb") as fh:
             fh.write(jpeg)
         return path
