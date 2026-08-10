@@ -49,9 +49,10 @@ MODELS_ROOT = "models"
 # Exposant du canal alpha, pas le poids de mélange de live_camera : ici l'opacité
 # vaut normalized ** HEATMAP_ALPHA (voir overlay_heatmap). Les deux constantes
 # sont injectées dans la page, qui en déduit la course de son curseur 0→1.
-HEATMAP_ALPHA = 4.0
-# Au-delà, n**alpha ne bouge plus visuellement (tout est déjà écrasé à 0).
-HEATMAP_ALPHA_MAX = 16.0
+HEATMAP_ALPHA = 2.0
+# Plafond volontairement bas : au-delà, l'anomalie elle-même s'efface dès qu'elle
+# n'atteint pas le haut de l'échelle (c'est vmax qui règle ça, pas l'exposant).
+HEATMAP_ALPHA_MAX = 4.0
 
 
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
@@ -137,16 +138,16 @@ class Runner:
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>_a<alpha>.jpg.
+        results/<dataset>/captures/<coreset>/<layer>/cap_<ts>_a<alpha>_v<vmax>.jpg.
 
-        L'alpha est dans le nom car il change l'image enregistrée sans laisser
-        d'autre trace : deux captures de la même scène au même seuil peuvent
-        n'avoir plus rien à voir selon l'exposant utilisé."""
+        Alpha et vmax sont dans le nom car ils changent l'image enregistrée sans
+        laisser d'autre trace, et ne se lisent pas l'un sans l'autre : vmax place
+        le normal sur l'échelle, alpha décide à quel point il est écrasé."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
             meta = self._fit_meta or {}
-            alpha = self._live["alpha"]
+            alpha, vmax = self._live["alpha"], self._live["vmax"]
         if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
@@ -157,11 +158,12 @@ class Runner:
             meta.get("coreset", "p?"), meta.get("layer", "l?"),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # L'exposant, pas la position du curseur : c'est lui qui décrit le rendu.
-        # Il peut avoir un frame de retard sur la dernière image encodée si le
-        # curseur vient de bouger — sans conséquence à 30 fps.
+        # Pour alpha : l'exposant, pas la position du curseur, c'est lui qui décrit
+        # le rendu. Les deux peuvent avoir un frame de retard sur la dernière image
+        # encodée si un curseur vient de bouger — sans conséquence à 30 fps.
         path = os.path.join(
-            out_dir, "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha)
+            out_dir,
+            "cap_{}_a{:.2f}_v{:g}.jpg".format(int(time.time() * 1000), alpha, vmax),
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
@@ -380,10 +382,10 @@ PAGE = """<!doctype html>
     <label for="vmax">Échelle couleur<small>vmax heatmap · en direct · l2≈20 l3≈10 l4≈260</small></label>
     <input id="vmax" name="vmax" class="live" type="number" min="1" step="1" value="10">
 
-    <label for="alpha">Alpha<small>0 = rampe · 1 = seul l'anormal reste · en direct</small></label>
+    <label for="alpha">Alpha<small>0 = heatmap pleine · 0.5 = linéaire · 1 = strict</small></label>
     <div class="slider">
-      <input id="alpha" name="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.5">
-      <output id="alphaval" for="alpha">0.50 · n^4.0</output>
+      <input id="alpha" name="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
+      <output id="alphaval" for="alpha">0.71 · n^2.0</output>
     </div>
 
     <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
@@ -406,15 +408,19 @@ const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const snapBtn = document.getElementById('snap');
 
-// Le curseur alpha va de 0 à 1, l'exposant envoyé au serveur de 1 à ALPHA_EXP_MAX,
-// en progression géométrique : un cran de curseur vaut un facteur constant sur
-// l'exposant, donc un réglage régulier à l'œil. Linéaire, les valeurs utiles
-// (1 à 6) seraient tassées dans le premier tiers de la course.
+// Curseur 0→1, exposant = MAX * s². Quadratique pour caler la course sur les
+// trois régimes de la famille x^k sur [0,1], la diagonale pile au milieu :
+//   s=0    -> n^0  : plat à 1, heatmap classique (bleu sur le normal)
+//   s<0.5  -> n^k, k<1 : racines, courbes AU-DESSUS de la diagonale (remontent
+//                        le fond — utile pour révéler une anomalie faible)
+//   s=0.5  -> n^1  : la diagonale, rampe linéaire
+//   s>0.5  -> n^k, k>1 : puissances, courbes SOUS la diagonale (écrasent le
+//                        normal, sommet n=1 fixe) — le régime recherché
 const ALPHA_EXP_MAX = __ALPHA_EXP_MAX__;      // injectés depuis les constantes
 const ALPHA_EXP_DEFAULT = __ALPHA_EXP_DEF__;  // Python, seule source de vérité
 const alphaInput = document.getElementById('alpha');
 const alphaOut = document.getElementById('alphaval');
-const alphaExp = () => Math.pow(ALPHA_EXP_MAX, parseFloat(alphaInput.value));
+const alphaExp = () => ALPHA_EXP_MAX * Math.pow(parseFloat(alphaInput.value), 2);
 
 function readParams() {
   const t = document.getElementById('threshold').value;
@@ -461,7 +467,7 @@ function alphaRender() {
 }
 alphaInput.addEventListener('input', () => post('/api/update', {alpha: alphaRender()}));
 // Position de départ = mappage inverse du défaut serveur.
-alphaInput.value = Math.log(ALPHA_EXP_DEFAULT) / Math.log(ALPHA_EXP_MAX);
+alphaInput.value = Math.sqrt(ALPHA_EXP_DEFAULT / ALPHA_EXP_MAX);
 alphaRender();
 
 // Capture de la frame propre (image de test), pendant que la caméra tourne.
