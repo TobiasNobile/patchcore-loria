@@ -73,12 +73,9 @@ FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.sy
 
 
 def tune_faiss_small_batches():
-    """Sous 128 requêtes, faiss 1.14 abandonne le chemin BLAS pour une boucle
-    ~20x plus lente PAR requête : chercher MOINS de patchs coûte alors plus cher
-    en absolu (mesuré : 100 requêtes = 307 ms contre 196 = 27 ms). Le défaut
-    (128000) fait basculer layer4 seul (49 patchs) et toute image sous 224 px.
-    20 est la valeur historique de faiss. Réglage global au process, appelé au
-    démarrage plutôt que patché dans patchcore/common.py (amont non modifié)."""
+    """Sous 128 requêtes, faiss quitte le chemin BLAS pour une boucle bien plus
+    lente par requête — cas de layer4 seul ou d'une image sous 224 px. Réglage
+    global au process, ici plutôt que dans patchcore/ (amont non modifié)."""
     import faiss
 
     faiss.cvar.distance_compute_blas_threshold = 20

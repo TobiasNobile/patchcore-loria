@@ -48,8 +48,7 @@ _env_ts = os.environ.get("FIT_TRAIN_SUBSET")
 if _env_ts:
     TRAIN_SUBSET = None if _env_ts.lower() in ("none", "all") else int(_env_ts)
 
-# Env : FIT_BACKBONE. resnet50 = même topologie que wideresnet50 à largeur
-# moitié, ~1.8x plus rapide sur CPU (cf. « Cadence live » du README).
+# Env : FIT_BACKBONE (cf. _BACKBONES pour les noms acceptés).
 BACKBONE_NAME = os.environ.get("FIT_BACKBONE", "wideresnet50")
 # Couches du backbone. Défaut layer2+layer3. Env FIT_LAYERS (CSV) pour n'en prendre
 # qu'une : "layer2" (784 patches/img) ou "layer3" (196 patches/img, 4x plus léger).
@@ -73,9 +72,7 @@ _env_pct = os.environ.get("FIT_CORESET_PCT")
 if _env_pct:
     PERCENTAGE = float(_env_pct)
 
-# Env : FIT_IMAGESIZE. Le resize suit le même rapport 256/224 (~1.14) pour que
-# le CenterCrop garde le même cadrage. Descendre la taille coupe deux fois :
-# le backbone ET le nombre de patchs à chercher.
+# Env : FIT_IMAGESIZE. Le resize garde le rapport 256/224, donc le même cadrage.
 IMAGESIZE = int(os.environ.get("FIT_IMAGESIZE", "224"))
 RESIZE = int(os.environ.get("FIT_RESIZE", str(round(IMAGESIZE * 256 / 224))))
 BATCH_SIZE = 8

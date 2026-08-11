@@ -1,11 +1,10 @@
 """Décompose le coût d'une frame live, étape par étape, pour une ou plusieurs banques.
 
-Répond à « où passe le temps, et 30/60 FPS sont-ils atteignables ». Les étapes
-sont celles de la boucle de bin/live_web.py :
+Les étapes sont celles de la boucle de bin/live_web.py :
 
-    preprocess  redimensionnement + normalisation de la frame (CPU, toujours)
-    embed       passe backbone + agrégation des patchs   <- le plancher
-    faiss       recherche des k plus proches voisins     <- dépend de la banque
+    preprocess  redimensionnement + normalisation de la frame
+    embed       passe backbone + agrégation des patchs
+    faiss       recherche des k plus proches voisins
     post        unpatch + score + flou de segmentation
     encode      overlay heatmap + JPEG (hors scoring, mais dans la boucle)
 
@@ -19,11 +18,8 @@ Env :
     BENCH_TORCH_THREADS=10  threads torch pour le backbone (défaut : inchangé)
     BENCH_DEVICE=cpu|cuda   force le device (défaut : cuda si dispo, sinon cpu)
     INFER_FAISS_GPU=1       recherche FAISS sur GPU (nécessite faiss-gpu-cu12)
-    BENCH_IMAGESIZE=160     taille d'entrée au lieu de celle du fit. Les scores
-                            n'ont alors plus de sens (banque construite à une
-                            autre échelle) mais les TEMPS sont valides : c'est
-                            ce qu'il faut pour chiffrer un refit avant de le
-                            lancer. Coupe deux fois — backbone et nb de patchs.
+    BENCH_IMAGESIZE=160     taille d'entrée au lieu de celle du fit : les scores
+                            perdent leur sens, les temps restent valides.
 """
 
 import json

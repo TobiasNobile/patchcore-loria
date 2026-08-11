@@ -47,31 +47,26 @@ LOGGER = logging.getLogger(__name__)
 
 MODELS_ROOT = "models"
 
-# Exposant du canal alpha, pas le poids de mélange de live_camera : ici l'opacité
-# vaut normalized ** HEATMAP_ALPHA (voir overlay_heatmap). Les deux constantes
-# sont injectées dans la page, qui en déduit la course de son curseur 0→1.
+# Exposant du canal alpha (pas le poids de mélange de live_camera), injecté dans
+# la page avec son plafond : elle en déduit la course de son curseur 0→1.
 HEATMAP_ALPHA = 2.0
-# Plafond volontairement bas : au-delà, l'anomalie elle-même s'efface dès qu'elle
-# n'atteint pas le haut de l'échelle (c'est vmax qui règle ça, pas l'exposant).
 HEATMAP_ALPHA_MAX = 4.0
 
 
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
-    """Vignette + heatmap jet, en BGR. L'échelle vmin/vmax est réglable en direct
-    depuis la page (pur affichage, aucun effet sur les scores) : indispensable car
-    l'échelle des scores dépend de la couche (~10 layer3, ~20 layer2, ~260 layer4).
+    """Vignette + heatmap jet, en BGR. vmin/vmax et alpha sont réglables en direct
+    depuis la page (pur affichage, aucun effet sur les scores).
 
-    Le canal alpha vaut normalized ** alpha, par pixel : `alpha` sert d'exposant,
-    pas de poids de mélange. Il tord la rampe en marche — 1 sur l'anomalie, 0 sur
-    le normal, qui reste donc l'image nue. Plus `alpha` monte, plus la coupure est
-    franche (alpha=1 : rampe linéaire ; alpha=0 : heatmap opaque partout)."""
+    Le canal alpha vaut normalized ** alpha, par pixel : `alpha` est un exposant,
+    pas un poids de mélange. Il tord la rampe en marche — 1 sur l'anomalie, 0 sur
+    le normal, qui reste l'image nue."""
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
     colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    # (H, W, 1) diffusé sur les 3 canaux BGR. normalized ∈ [0, 1] et alpha ≥ 0
-    # gardent la puissance dans [0, 1] : pas de clip nécessaire.
+    # (H, W, 1) diffusé sur les 3 canaux BGR. Avec normalized ∈ [0, 1] et
+    # alpha ≥ 0 la puissance reste dans [0, 1] : pas de clip nécessaire.
     a = (normalized.astype(np.float32) ** alpha)[:, :, None]
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
@@ -131,8 +126,7 @@ class Runner:
                 if fields.get(k) is not None:
                     self._live[k] = float(fields[k])
             if fields.get("alpha") is not None:
-                # Exposant : un négatif inverserait la rampe (le normal deviendrait
-                # opaque) et ferait sortir l'alpha de [0, 1].
+                # Un exposant négatif inverserait la rampe et sortirait de [0, 1].
                 self._live["alpha"] = min(
                     max(float(fields["alpha"]), 0.0), HEATMAP_ALPHA_MAX
                 )
@@ -141,10 +135,8 @@ class Runner:
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
         results/<dataset>/captures/<layer>/<coreset>/v<vmax>/cap_<ts>_s<curseur>_a<exposant>.jpg.
 
-        Ce qui définit une série est un dossier (couche, coreset, échelle) ; ce qui
-        varie d'une capture à l'autre est dans le nom. Le curseur `s` et l'exposant
-        `a` sont les deux faces du même réglage — s pour retrouver la position à
-        l'écran, a pour la courbe réellement appliquée."""
+        Ce qui définit une série est un dossier, ce qui varie d'une capture à
+        l'autre est dans le nom."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
@@ -162,12 +154,9 @@ class Runner:
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # La page n'envoie que l'exposant ; la position du curseur s'en déduit en
-        # inversant son mappage (alpha = MAX * s²), plutôt que de faire circuler
-        # deux valeurs qui pourraient se désynchroniser.
+        # La page n'envoie que l'exposant : on inverse son mappage plutôt que de
+        # faire circuler deux valeurs qui pourraient se désynchroniser.
         slider = (alpha / HEATMAP_ALPHA_MAX) ** 0.5 if HEATMAP_ALPHA_MAX else 0.0
-        # Les valeurs peuvent avoir un frame de retard sur la dernière image
-        # encodée si un curseur vient de bouger — sans conséquence à 30 fps.
         path = os.path.join(
             out_dir,
             "cap_{}_s{:.2f}_a{:.2f}.jpg".format(
@@ -234,13 +223,22 @@ class Runner:
             patchcore.utils.fix_seeds(fit_config["seed"])
             transform = build_transform(fit_config)
             with self._lock:
+                layer = "-".join(
+                    l.replace("layer", "l")
+                    for l in fit_config.get("layers_to_extract_from", ["layer2", "layer3"])
+                )
+                # Sinon deux configurations incomparables se mélangeraient dans
+                # le même dossier de captures. Suffixe seulement si non standard,
+                # comme build_tag() du fit.
+                backbone = fit_config.get("backbone_name", "wideresnet50")
+                if backbone != "wideresnet50":
+                    layer = "{}_{}".format(backbone, layer)
+                if fit_config.get("imagesize", 224) != 224:
+                    layer = "{}_im{}".format(layer, fit_config["imagesize"])
                 self._fit_meta = {
                     "coreset": "identity" if fit_config.get("sampler_name") == "identity"
                                else "p{:g}".format(fit_config.get("coreset_pct", 0)),
-                    "layer": "-".join(
-                        l.replace("layer", "l")
-                        for l in fit_config.get("layers_to_extract_from", ["layer2", "layer3"])
-                    ),
+                    "layer": layer,
                 }
 
             source = params["source"]
