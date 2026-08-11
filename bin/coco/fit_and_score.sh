@@ -47,16 +47,19 @@ case "${FIT_LAYERS:-}" in
   ""|"layer2,layer3") LSUF="";;
   *) LSUF="_$(printf '%s' "${FIT_LAYERS}" | sed 's/layer/l/g; s/,/-/g')";;
 esac
-TAG="wideresnet50${LSUF}_${SAMP}_ts${TS}_s${SEED}"
+# Doit rester aligné sur build_tag() de bin/coco/fit/memory_bank.py.
+BB="${FIT_BACKBONE:-wideresnet50}"
+case "${FIT_IMAGESIZE:-224}" in 224) IMSUF="";; *) IMSUF="_im${FIT_IMAGESIZE}";; esac
+TAG="${BB}${LSUF}${IMSUF}_${SAMP}_ts${TS}_s${SEED}"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 
-echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3}"
+echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3} backbone=${BB} imagesize=${FIT_IMAGESIZE:-224}"
 echo "    banque (conservée) -> ${BANK_DIR}"
 python bin/coco/fit/memory_bank.py
 
 echo "=== HISTOGRAMME good vs knife ==="
 export HIST_BANK_DIR="${BANK_DIR}"
-export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco${LSUF}_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
+export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_${BB}${LSUF}${IMSUF}_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
 export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${LSUF}/overlay_idx{idx}.png"
 python bin/coco/infer/histogram.py --n_per_class "${NPC}"
 
