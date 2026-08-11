@@ -37,6 +37,7 @@ from live_camera import (  # isort: skip
     SMOOTH_WINDOW,
     build_transform,
     preprocess,
+    tune_faiss_small_batches,
 )
 
 import patchcore.banks
@@ -225,6 +226,7 @@ class Runner:
     def _run(self, params):
         capture = None
         try:
+            tune_faiss_small_batches()
             device = patchcore.utils.set_torch_device(GPU)
             patchcore_instance, fit_config = patchcore.banks.load_bank(
                 params["bank_dir"], device, FAISS_ON_GPU, FAISS_NUM_WORKERS
