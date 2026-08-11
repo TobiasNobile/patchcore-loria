@@ -97,3 +97,10 @@ button:disabled { opacity: .35; cursor: default; }
         font-variant-numeric: tabular-nums; }
 #capture { color: var(--ok); font-size: 12px; min-height: 16px;
            text-align: center; word-break: break-all; }
+
+#notice {
+  border: 1px solid #f0c000; background: #fffbeb; color: #7a5b00;
+  border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: 420px;
+  text-align: center;
+}
+#notice[hidden] { display: none; }

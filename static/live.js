@@ -133,6 +133,10 @@ function apply(s) {
     ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames`
     : "";
   $("error").textContent = s.error || "";
+  // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
+  // tourner sur GPU alors que non.
+  $("notice").textContent = s.device_note || "";
+  $("notice").hidden = !s.device_note;
 
   // Seuls les champs .live restent actifs : changer les autres en cours de route
   // rendrait les scores incomparables d'une frame à l'autre.

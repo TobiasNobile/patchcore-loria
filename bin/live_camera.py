@@ -41,7 +41,7 @@ from torchvision import transforms
 
 import patchcore.banks
 import patchcore.utils
-from experiments.runtime import select_device, tune_faiss_small_batches
+from experiments.runtime import resolve_device, select_device, tune_faiss_small_batches
 
 LOGGER = logging.getLogger(__name__)
 

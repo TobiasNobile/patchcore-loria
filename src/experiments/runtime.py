@@ -9,10 +9,16 @@ LOGGER = logging.getLogger(__name__)
 
 
 def select_device(preferred=None):
-    """Device d'inférence : auto | cpu | cuda[:N].
+    """Device d'inférence. Voir resolve_device pour les règles."""
+    return resolve_device(preferred)[0]
+
+
+def resolve_device(preferred=None):
+    """(device, avertissement) — l'avertissement est non nul en cas de repli.
 
     `preferred` (choisi dans la page) l'emporte sur PATCHCORE_DEVICE, qui
-    l'emporte sur `auto`. Un device indisponible retombe sur cpu.
+    l'emporte sur `auto`. Un device indisponible retombe sur cpu ; l'appelant
+    doit le signaler, sinon on croit tourner sur GPU sans y être.
     """
     choice = (preferred or os.environ.get("PATCHCORE_DEVICE") or "auto").strip().lower()
     if choice == "auto":
@@ -28,10 +34,11 @@ def select_device(preferred=None):
     available = {"cpu": True, "cuda": torch.cuda.is_available()}
     if kind not in available:
         raise ValueError("PATCHCORE_DEVICE inconnu : {}".format(choice))
-    if not available[kind]:
-        LOGGER.warning("Device %s indisponible, repli sur cpu.", choice)
-        choice = "cpu"
-    return torch.device(choice)
+    if available[kind]:
+        return torch.device(choice), None
+    note = "{} indisponible sur cette machine — calcul sur CPU.".format(choice)
+    LOGGER.warning(note)
+    return torch.device("cpu"), note
 
 
 def tune_faiss_small_batches():

@@ -35,7 +35,7 @@ from live_camera import (  # isort: skip
     SMOOTH_WINDOW,
     build_transform,
     preprocess,
-    select_device,
+    resolve_device,
     tune_faiss_small_batches,
 )
 
@@ -135,6 +135,7 @@ class Runner:
             "error": None,
             "params": None,
             "device": None,
+            "device_note": None,
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
@@ -213,7 +214,7 @@ class Runner:
             # attendre que le thread principal ait chargé la banque.
             self._state.update(
                 running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
-                verdict=None, error=None, params=params,
+                verdict=None, error=None, params=params, device_note=None,
             )
             # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
             self._live = {
@@ -242,7 +243,7 @@ class Runner:
         capture = None
         try:
             tune_faiss_small_batches()
-            device = select_device(params["device"])
+            device, device_note = resolve_device(params["device"])
             patchcore_instance, fit_config = patchcore.banks.load_bank(
                 params["bank_dir"], device,
                 params["faiss_gpu"], params["faiss_threads"],
@@ -267,7 +268,7 @@ class Runner:
                     "layer": layer,
                 }
 
-            self._update(device=str(device))
+            self._update(device=str(device), device_note=device_note)
 
             source = params["source"]
             capture = cv2.VideoCapture(int(source) if source.isdigit() else source)
