@@ -1,0 +1,99 @@
+:root {
+  --ink: #111; --muted: #6b7280; --faint: #9ca3af;
+  --line: #e5e7eb; --bg: #fff; --panel: #fafafa;
+  --ok: #0a7a2f; --bad: #c01919;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; padding: 24px;
+  background: var(--bg); color: var(--ink);
+  font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ─── Bandeau : quelle banque tourne, et ce qu'il faut en savoir ─────────── */
+#bankbar {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px; margin-bottom: 24px;
+}
+#bankname {
+  font-size: 26px; font-weight: 600; letter-spacing: -0.01em;
+  word-break: break-all;
+}
+#chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 12px; font-size: 12px; background: var(--panel);
+}
+.chip b { font-weight: 600; }
+.chip span { color: var(--faint); text-transform: uppercase; font-size: 10px;
+             letter-spacing: .06em; }
+
+/* ─── Trois colonnes : avant / pendant / réglages d'affichage ────────────── */
+main {
+  display: grid; gap: 28px; align-items: start;
+  grid-template-columns: 260px minmax(320px, 1fr) 260px;
+}
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+.panel { border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.panel h2 {
+  margin: 0 0 14px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); font-weight: 600;
+}
+.panel h2 .hint { text-transform: none; letter-spacing: 0; color: var(--faint);
+                  font-weight: 400; margin-left: 6px; }
+
+label { display: block; margin-bottom: 4px; color: #374151; }
+label + input, label + select, label + .slider { margin-bottom: 14px; }
+label small { display: block; color: var(--faint); font-size: 11px;
+              font-weight: 400; line-height: 1.35; margin-top: 1px; }
+
+input, select { font: inherit; width: 100%; padding: 7px 9px;
+                border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
+input:focus, select:focus { outline: 2px solid #111; outline-offset: -1px; }
+input:disabled, select:disabled { background: #f3f4f6; color: var(--faint); }
+
+label.check { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 14px; }
+label.check input { width: auto; margin-top: 2px; flex: none; }
+
+.slider { display: flex; align-items: center; gap: 10px; }
+.slider input[type=range] { padding: 0; border: none; background: none; }
+.slider output { color: var(--muted); font-size: 12px; min-width: 84px;
+                 text-align: right; white-space: nowrap;
+                 font-variant-numeric: tabular-nums; }
+
+.actions { display: flex; gap: 8px; margin-top: 18px; }
+button { font: inherit; padding: 8px 16px; border: 1px solid var(--ink);
+         border-radius: 6px; background: var(--ink); color: #fff; cursor: pointer; }
+button.secondary { background: #fff; color: var(--ink); }
+button:disabled { opacity: .35; cursor: default; }
+#error { color: var(--bad); font-size: 12px; min-height: 16px; margin: 10px 0 0; }
+
+/* ─── Scène ──────────────────────────────────────────────────────────────── */
+#stage { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+#camframe {
+  position: relative; width: 100%; max-width: 420px; aspect-ratio: 1;
+  border-radius: 10px; overflow: hidden; background: #f3f4f6;
+}
+#cam { width: 100%; height: 100%; object-fit: cover; display: block;
+       image-rendering: pixelated; }
+#cam[hidden] { display: none; }
+#placeholder { position: absolute; inset: 0; display: grid; place-items: center;
+               color: var(--faint); font-size: 13px; }
+#flash { position: absolute; inset: 0; background: #fff; opacity: 0;
+         pointer-events: none; }
+#flash.shoot { animation: shutter .3s ease-out; }
+@keyframes shutter { from { opacity: .85; } to { opacity: 0; } }
+
+#score { font-size: 72px; font-weight: 600; line-height: 1;
+         font-variant-numeric: tabular-nums; }
+#verdict { font-size: 15px; letter-spacing: .1em; text-transform: uppercase;
+           min-height: 20px; }
+.ok { color: var(--ok); } .anomalie { color: var(--bad); } .idle { color: var(--faint); }
+#meta { color: var(--muted); font-size: 12px; min-height: 16px;
+        font-variant-numeric: tabular-nums; }
+#capture { color: var(--ok); font-size: 12px; min-height: 16px;
+           text-align: center; word-break: break-all; }

@@ -47,6 +47,8 @@ import patchcore.utils
 LOGGER = logging.getLogger(__name__)
 
 MODELS_ROOT = "models"
+TEMPLATES_DIR = "templates"
+STATIC_DIR = "static"
 
 # Exposant du canal alpha (pas le poids de mélange de live_camera), injecté dans
 # la page avec son plafond : elle en déduit la course de son curseur 0→1.
@@ -78,13 +80,33 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
 
 
 def find_banks():
-    """Les dossiers de models/ qui portent un fit_config.json, pour le menu."""
+    """Les banques de models/, avec de quoi renseigner le bandeau sans les charger."""
     banks = []
     for root, dirs, files in os.walk(MODELS_ROOT):
-        if "fit_config.json" in files:
-            banks.append(root)
-            dirs[:] = []  # une banque n'en contient pas une autre
-    return sorted(banks)
+        if "fit_config.json" not in files:
+            continue
+        dirs[:] = []  # une banque n'en contient pas une autre
+        try:
+            with open(os.path.join(root, "fit_config.json")) as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        banks.append({
+            "dir": root,
+            "dataset": os.path.basename(os.path.dirname(os.path.normpath(root))),
+            "backbone": cfg.get("backbone_name", "?"),
+            "layers": "-".join(
+                l.replace("layer", "l")
+                for l in cfg.get("layers_to_extract_from", [])
+            ),
+            "coreset": ("identity" if cfg.get("sampler_name") == "identity"
+                        else "p{:g}".format(cfg.get("coreset_pct", 0))),
+            "imagesize": cfg.get("imagesize", 224),
+            "bank_size": cfg.get("memory_bank_size", 0),
+            "bank_gb": cfg.get("bank_gb", 0.0),
+            "train_images": cfg.get("n_train_images"),
+        })
+    return sorted(banks, key=lambda b: b["dir"])
 
 
 class Runner:
@@ -325,231 +347,6 @@ class Runner:
 
 RUNNER = Runner()
 
-PAGE = """<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PatchCore live</title>
-<style>
-  body { background:#fff; color:#111; font:14px -apple-system,BlinkMacSystemFont,sans-serif;
-         margin:0; padding:48px; display:flex; flex-direction:column; align-items:center; gap:32px; }
-  #score { font-size:96px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1; }
-  #verdict { font-size:18px; letter-spacing:.08em; text-transform:uppercase; min-height:22px; }
-  .ok { color:#0a7a2f; } .anomalie { color:#c01919; } .idle { color:#999; }
-  #meta { color:#888; font-size:12px; min-height:16px; }
-  form { display:grid; grid-template-columns:auto 1fr; gap:10px 16px; align-items:center;
-         width:min(560px,100%); }
-  label { color:#555; }
-  label small { display:block; color:#aaa; font-size:11px; }
-  #cam { width:320px; height:320px; object-fit:cover; border-radius:6px; background:#f5f5f5;
-         image-rendering:pixelated; display:block; }
-  #cam[hidden] { display:none; }
-  #camwrap { display:flex; flex-direction:column; align-items:center; gap:12px; }
-  #camframe { position:relative; width:320px; height:320px; }
-  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none;
-           border-radius:6px; }
-  #flash.shoot { animation: shutter .3s ease-out; }
-  @keyframes shutter { from { opacity:.85; } to { opacity:0; } }
-  input, select { font:inherit; padding:6px 8px; border:1px solid #ccc; border-radius:4px;
-                  background:#fff; width:100%; box-sizing:border-box; }
-  input:disabled, select:disabled { background:#f5f5f5; color:#888; }
-  .slider { display:flex; align-items:center; gap:10px; }
-  .slider input[type=range] { padding:0; border:none; background:none; }
-  .slider output { color:#888; font-size:12px; font-variant-numeric:tabular-nums;
-                   min-width:86px; text-align:right; white-space:nowrap; }
-  .row { grid-column:1/-1; display:flex; gap:12px; align-items:center; }
-  button { font:inherit; padding:8px 20px; border:1px solid #111; border-radius:4px;
-           background:#111; color:#fff; cursor:pointer; }
-  button.secondary { background:#fff; color:#111; }
-  button:disabled { opacity:.35; cursor:default; }
-  #error { color:#c01919; font-size:12px; min-height:16px; }
-  #capture { color:#0a7a2f; font-size:12px; min-height:16px; text-align:center; }
-</style>
-</head>
-<body>
-  <div id="camwrap">
-    <div id="camframe">
-      <img id="cam" hidden alt="">
-      <div id="flash"></div>
-    </div>
-    <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
-    <div id="capture"></div>
-  </div>
-  <div id="score">—</div>
-  <div id="verdict" class="idle">arrêté</div>
-  <div id="meta"></div>
-
-  <form id="params" autocomplete="off">
-    <label for="bank_dir">Banque<small>images normales de référence</small></label>
-    <select id="bank_dir" name="bank_dir">__BANKS__</select>
-
-    <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
-    <input id="source" name="source" value="0">
-
-    <label for="stride">Stride<small>ne score qu'une frame sur N</small></label>
-    <input id="stride" name="stride" type="number" min="1" step="1" value="1">
-
-    <label for="zoom">Zoom<small>recadrage centré · réglable en direct</small></label>
-    <input id="zoom" name="zoom" class="live" type="number" min="1" step="0.1" value="1">
-
-    <label for="vmax">Échelle couleur<small>vmax heatmap · en direct · l2≈20 l3≈10 l4≈260</small></label>
-    <input id="vmax" name="vmax" class="live" type="number" min="1" step="1" value="10">
-
-    <label for="alpha">Alpha<small>0 = heatmap pleine · 0.5 = linéaire · 1 = strict</small></label>
-    <div class="slider">
-      <input id="alpha" name="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
-      <output id="alphaval" for="alpha">0.71 · n^2.0</output>
-    </div>
-
-    <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
-    <select id="device" name="device">
-      <option value="auto">auto</option><option value="cpu">cpu</option>
-      <option value="cuda">cuda</option>
-    </select>
-
-    <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche · 1 sur macOS (deadlock)</small></label>
-    <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="__FAISS_THREADS__">
-
-    <label for="faiss_gpu">FAISS sur GPU<small>⚠ exige une carte NVIDIA ET le paquet faiss-gpu ·
-      la banque doit tenir en VRAM · sans ça le démarrage échoue</small></label>
-    <div><input id="faiss_gpu" name="faiss_gpu" type="checkbox" style="width:auto"__FAISS_GPU__></div>
-
-    <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
-    <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
-
-    <label for="loop">Boucler<small>rejouer un fichier sans fin</small></label>
-    <div><input id="loop" name="loop" type="checkbox" style="width:auto"></div>
-
-    <div class="row">
-      <button id="start" type="submit">Démarrer</button>
-      <button id="stop" type="button" class="secondary" disabled>Arrêter</button>
-      <span id="error"></span>
-    </div>
-  </form>
-
-<script>
-const form = document.getElementById('params');
-const fields = [...form.querySelectorAll('input,select')];
-const startBtn = document.getElementById('start');
-const stopBtn = document.getElementById('stop');
-const snapBtn = document.getElementById('snap');
-
-// Curseur 0→1, exposant = MAX * s². Quadratique pour caler la course sur les
-// trois régimes de la famille x^k sur [0,1], la diagonale pile au milieu :
-//   s=0    -> n^0  : plat à 1, heatmap classique (bleu sur le normal)
-//   s<0.5  -> n^k, k<1 : racines, courbes AU-DESSUS de la diagonale (remontent
-//                        le fond — utile pour révéler une anomalie faible)
-//   s=0.5  -> n^1  : la diagonale, rampe linéaire
-//   s>0.5  -> n^k, k>1 : puissances, courbes SOUS la diagonale (écrasent le
-//                        normal, sommet n=1 fixe) — le régime recherché
-const ALPHA_EXP_MAX = __ALPHA_EXP_MAX__;      // injectés depuis les constantes
-const ALPHA_EXP_DEFAULT = __ALPHA_EXP_DEF__;  // Python, seule source de vérité
-const alphaInput = document.getElementById('alpha');
-const alphaOut = document.getElementById('alphaval');
-const alphaExp = () => ALPHA_EXP_MAX * Math.pow(parseFloat(alphaInput.value), 2);
-
-function readParams() {
-  const t = document.getElementById('threshold').value;
-  return {
-    bank_dir: document.getElementById('bank_dir').value,
-    source: document.getElementById('source').value,
-    stride: parseInt(document.getElementById('stride').value || '1', 10),
-    zoom: parseFloat(document.getElementById('zoom').value || '1'),
-    vmax: parseFloat(document.getElementById('vmax').value || '10'),
-    alpha: alphaExp(),  // le serveur attend l'exposant, pas la position du curseur
-    threshold: t === '' ? null : parseFloat(t),
-    loop: document.getElementById('loop').checked,
-    device: document.getElementById('device').value,
-    faiss_threads: parseInt(document.getElementById('faiss_threads').value || '1', 10),
-    faiss_gpu: document.getElementById('faiss_gpu').checked,
-  };
-}
-
-async function post(path, body) {
-  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
-                              body: JSON.stringify(body || {})});
-  return r.json();
-}
-
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  document.getElementById('error').textContent = '';
-  const res = await post('/api/start', readParams());
-  if (res.error) document.getElementById('error').textContent = res.error;
-  refresh();
-});
-stopBtn.addEventListener('click', async () => { await post('/api/stop'); refresh(); });
-
-// Zoom, vmax et alpha : réglables À CHAUD, envoyés sans redémarrer la boucle.
-['zoom', 'vmax'].forEach(id => {
-  document.getElementById(id).addEventListener('input', () => {
-    post('/api/update', {[id]: parseFloat(document.getElementById(id).value)});
-  });
-});
-
-// À part : l'API parle en exposant, le curseur en 0→1.
-function alphaRender() {
-  const e = alphaExp();
-  alphaOut.textContent =
-    parseFloat(alphaInput.value).toFixed(2) + ' · n^' + e.toFixed(1);
-  return e;
-}
-alphaInput.addEventListener('input', () => post('/api/update', {alpha: alphaRender()}));
-// Position de départ = mappage inverse du défaut serveur.
-alphaInput.value = Math.sqrt(ALPHA_EXP_DEFAULT / ALPHA_EXP_MAX);
-alphaRender();
-
-// Capture de la frame propre (image de test), pendant que la caméra tourne.
-snapBtn.addEventListener('click', async () => {
-  const res = await post('/api/snapshot');
-  if (res && res.ok) {
-    // Effet obturateur : relance l'animation même en clics rapides (reflow).
-    const fl = document.getElementById('flash');
-    fl.classList.remove('shoot'); void fl.offsetWidth; fl.classList.add('shoot');
-  }
-  document.getElementById('capture').textContent =
-    res && res.ok ? 'Enregistré : ' + res.path
-                  : ((res && res.error) || 'échec de la capture');
-});
-
-function apply(s) {
-  // Le flux MJPEG se termine avec la boucle : on rebranche le <img> à chaque
-  // démarrage (URL unique, sinon le navigateur ressert la réponse close).
-  const cam = document.getElementById('cam');
-  if (s.running && cam.hidden) {
-    cam.src = '/stream.mjpg?' + Date.now();
-    cam.hidden = false;
-  } else if (!s.running && !cam.hidden) {
-    cam.hidden = true;
-    cam.removeAttribute('src');
-  }
-  document.getElementById('score').textContent =
-    s.score === null || s.score === undefined ? '—' : s.score.toFixed(2);
-  const v = document.getElementById('verdict');
-  if (!s.running) { v.textContent = 'arrêté'; v.className = 'idle'; }
-  else if (s.verdict) { v.textContent = s.verdict; v.className = s.verdict; }
-  else { v.textContent = 'en cours'; v.className = 'idle'; }
-  document.getElementById('meta').textContent = s.running
-    ? `${s.device || '…'} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames`
-    : '';
-  document.getElementById('error').textContent = s.error || '';
-  // Paramètres figés tant que la boucle tourne (sauf ceux marqués .live : zoom,
-  // vmax et alpha, ajustables à chaud). Changer les autres rendrait les scores
-  // incomparables d'une frame à l'autre.
-  fields.forEach(f => { if (!f.classList.contains('live')) f.disabled = s.running; });
-  startBtn.disabled = s.running;
-  stopBtn.disabled = !s.running;
-  snapBtn.disabled = !s.running;
-}
-
-async function refresh() { apply(await (await fetch('/api/state')).json()); }
-refresh();
-setInterval(refresh, 300);
-</script>
-</body>
-</html>
-"""
 
 
 def _faiss_gpu_unavailable():
@@ -579,19 +376,41 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj), "application/json")
 
+    def _serve_file(self, path, content_type):
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            self._send(404, "not found", "text/plain")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            options = "".join(
-                '<option value="{0}">{0}</option>'.format(b) for b in find_banks()
-            ) or '<option value="">aucune banque dans models/</option>'
-            page = (
-                PAGE.replace("__BANKS__", options)
-                .replace("__ALPHA_EXP_MAX__", repr(HEATMAP_ALPHA_MAX))
-                .replace("__ALPHA_EXP_DEF__", repr(HEATMAP_ALPHA))
-                .replace("__FAISS_THREADS__", str(FAISS_NUM_WORKERS))
-                .replace("__FAISS_GPU__", " checked" if FAISS_ON_GPU else "")
+            self._serve_file(
+                os.path.join(TEMPLATES_DIR, "live.html"), "text/html; charset=utf-8"
             )
-            self._send(200, page, "text/html; charset=utf-8")
+        elif self.path.startswith("/static/"):
+            name = os.path.basename(self.path.split("?")[0])
+            types = {".css": "text/css", ".js": "text/javascript"}
+            ctype = types.get(os.path.splitext(name)[1])
+            if not ctype:
+                self._send(404, "not found", "text/plain")
+                return
+            self._serve_file(os.path.join(STATIC_DIR, name), ctype + "; charset=utf-8")
+        elif self.path == "/api/config":
+            self._json({
+                "alpha_max": HEATMAP_ALPHA_MAX,
+                "alpha_default": HEATMAP_ALPHA,
+                "faiss_threads": FAISS_NUM_WORKERS,
+                "faiss_gpu": FAISS_ON_GPU,
+                "banks": find_banks(),
+            })
         elif self.path == "/api/state":
             self._json(RUNNER.state())
         elif self.path.startswith("/stream.mjpg"):
