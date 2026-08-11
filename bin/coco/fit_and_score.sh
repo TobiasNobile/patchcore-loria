@@ -44,7 +44,8 @@ print(build_tag(cfg), suffix)
 ")"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 
-echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3} backbone=${BB} imagesize=${FIT_IMAGESIZE:-224}"
+echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3}"
+echo "    -> ${TAG}"
 echo "    banque (conservée) -> ${BANK_DIR}"
 python bin/coco/fit/memory_bank.py
 
