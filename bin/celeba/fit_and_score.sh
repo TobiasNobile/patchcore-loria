@@ -21,15 +21,15 @@ HEATMAPS_PER_CLASS="${HEATMAPS_PER_CLASS:-15}"            # 15 + 15 = 30
 NPC="${NPC:-1000}"                                         # n_per_class histogramme
 SEED=0
 
-# tag identique à build_tag() du fit (suffixe layer vide pour le défaut layer2+3).
-ts_lc=$(printf '%s' "${FIT_TRAIN_SUBSET}" | tr '[:upper:]' '[:lower:]')
-case "${ts_lc}" in ""|none|all) TS="all";; *) TS="${FIT_TRAIN_SUBSET}";; esac
-if [ "${FIT_SAMPLER}" = "identity" ]; then SAMP="identity"; else SAMP="${FIT_SAMPLER}_p${FIT_CORESET_PCT}"; fi
-case "${FIT_LAYERS:-}" in
-  ""|"layer2,layer3") LSUF="";;
-  *) LSUF="_$(printf '%s' "${FIT_LAYERS}" | sed 's/layer/l/g; s/,/-/g')";;
-esac
-TAG="wideresnet50${LSUF}_${SAMP}_ts${TS}_s${SEED}"
+# Le tag vient de build_tag() : une seule source de vérité avec le fit.
+read -r TAG SUFFIX <<<"$(python -c "
+from experiments.pipelines import build_tag, fit_settings
+cfg = fit_settings('${FIT_MODELS_DIR}', 0.1, 2000)
+layers = cfg['layers_to_extract_from']
+suffix = '' if layers == ['layer2', 'layer3'] else '_' + '-'.join(
+    l.replace('layer', 'l') for l in layers)
+print(build_tag(cfg), suffix)
+")"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 
 echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3}"
@@ -38,12 +38,12 @@ python bin/celeba/fit/memory_bank.py
 
 echo "=== HISTOGRAMME no-hat vs hat + 30 HEATMAPS ==="
 export HIST_BANK_DIR="${BANK_DIR}"
-export HIST_OUTPUT_PATH="results/celeba/histograms/hist_celeba${LSUF}_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
-export HEATMAP_OUTPUT_PATH="results/celeba/heatmaps${LSUF}/overlay_idx{idx}.png"
+export HIST_OUTPUT_PATH="results/celeba/histograms/hist_celeba${SUFFIX}_ts${FIT_TRAIN_SUBSET}_nn${FIT_NUM_NN}_s${SEED}.png"
+export HEATMAP_OUTPUT_PATH="results/celeba/heatmaps${SUFFIX}/overlay_idx{idx}.png"
 python bin/celeba/infer/histogram.py --n_per_class "${NPC}"
 python bin/celeba/infer/heatmap.py --n_per_class "${HEATMAPS_PER_CLASS}"
 
 echo "=== Terminé ==="
 echo "    Banque   : ${BANK_DIR}"
 echo "    Histo    : results/celeba/histograms/p${FIT_CORESET_PCT}/"
-echo "    Heatmaps : results/celeba/heatmaps${LSUF}/ts${TS}_p${FIT_CORESET_PCT}/"
+echo "    Heatmaps : results/celeba/heatmaps${SUFFIX}/ts${FIT_TRAIN_SUBSET}_p${FIT_CORESET_PCT}/"

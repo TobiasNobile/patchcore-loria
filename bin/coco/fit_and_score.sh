@@ -33,17 +33,15 @@ echo "=== FETCH COCO -> ${COCO_PATH} (CAP_NORMAL=${CAP_NORMAL}) ==="
 python tools/coco_fetch.py
 
 # tag identique à build_tag() du fit (suffixe layer vide pour le défaut layer2+3).
-ts_lc=$(printf '%s' "${FIT_TRAIN_SUBSET}" | tr '[:upper:]' '[:lower:]')
-case "${ts_lc}" in ""|none|all) TS="all";; *) TS="${FIT_TRAIN_SUBSET}";; esac
-if [ "${FIT_SAMPLER}" = "identity" ]; then SAMP="identity"; else SAMP="${FIT_SAMPLER}_p${FIT_CORESET_PCT}"; fi
-case "${FIT_LAYERS:-}" in
-  ""|"layer2,layer3") LSUF="";;
-  *) LSUF="_$(printf '%s' "${FIT_LAYERS}" | sed 's/layer/l/g; s/,/-/g')";;
-esac
-# Doit rester aligné sur build_tag() de bin/coco/fit/memory_bank.py.
-BB="${FIT_BACKBONE:-wideresnet50}"
-case "${FIT_IMAGESIZE:-224}" in 224) IMSUF="";; *) IMSUF="_im${FIT_IMAGESIZE}";; esac
-TAG="${BB}${LSUF}${IMSUF}_${SAMP}_ts${TS}_s${SEED}"
+# Le tag vient de build_tag() : une seule source de vérité avec le fit.
+read -r TAG SUFFIX <<<"$(python -c "
+from experiments.pipelines import build_tag, fit_settings
+cfg = fit_settings('${FIT_MODELS_DIR}', 0.05, None)
+layers = cfg['layers_to_extract_from']
+suffix = '' if layers == ['layer2', 'layer3'] else '_' + '-'.join(
+    l.replace('layer', 'l') for l in layers)
+print(build_tag(cfg), suffix)
+")"
 BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
 
 echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3} backbone=${BB} imagesize=${FIT_IMAGESIZE:-224}"
@@ -52,8 +50,8 @@ python bin/coco/fit/memory_bank.py
 
 echo "=== HISTOGRAMME good vs knife ==="
 export HIST_BANK_DIR="${BANK_DIR}"
-export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_${BB}${LSUF}${IMSUF}_ts${TS}_nn${FIT_NUM_NN}_s${SEED}.png"
-export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${LSUF}/overlay_idx{idx}.png"
+export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_${TAG}_nn${FIT_NUM_NN}.png"
+export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${SUFFIX}/overlay_idx{idx}.png"
 python bin/coco/infer/histogram.py --n_per_class "${NPC}"
 
 echo "=== 30 HEATMAPS (${HEATMAPS_PER_CLASS} good + ${HEATMAPS_PER_CLASS} knife) ==="
@@ -62,4 +60,4 @@ python bin/coco/infer/heatmap.py --n_per_class "${HEATMAPS_PER_CLASS}"
 echo "=== Terminé ==="
 echo "    Banque   : ${BANK_DIR}"
 echo "    Histo    : results/coco/histograms/p${FIT_CORESET_PCT}/"
-echo "    Heatmaps : results/coco/heatmaps/ts${TS}_p${FIT_CORESET_PCT}/"
+echo "    Heatmaps : results/coco/heatmaps${SUFFIX}/ts${FIT_TRAIN_SUBSET}_p${FIT_CORESET_PCT}/"
