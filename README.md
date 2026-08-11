@@ -314,6 +314,28 @@ PatchCore score surtout la nouveauté de scène plutôt que le petit couteau. Le
 en 20k et 50k), à ne pas sur-interpréter. Contraste avec CelebA (visages alignés,
 AUROC 0,86) : PatchCore exige un « normal » homogène, que COCO n'offre pas.
 
+## Cadence live — coût d'une frame (`bin/bench_live.py`)
+
+COCO l3-l4, ts=20000. Budgets : 33,3 ms = 30 FPS, 16,7 ms = 60 FPS. `scoring`
+exclut l'encodage JPEG.
+
+CPU (Apple M-series, torch 4 threads / faiss 1) :
+
+| backbone | taille | coreset | banque | preprocess | embed | faiss | post | encode | scoring | FPS | AUROC |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| wideresnet50 | 224 px | p0.01 | 39 200 | 2,3 ms | 54,2 ms | 26,8 ms | 3,9 ms | 1,0 ms | 87,2 ms | 11,3 | 0,6375 |
+| wideresnet50 | 224 px | p0.02 | 78 400 | 2,5 ms | 58,6 ms | 54,2 ms | 0,0 ms | 0,9 ms | 115,3 ms | 8,6 | 0,6395 |
+| wideresnet50 | 224 px | p0.05 | 196 000 | 2,4 ms | 52,7 ms | 133,4 ms | 2,4 ms | 1,0 ms | 190,9 ms | 5,2 | 0,6406 |
+| resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
+
+GPU (Grid'5000, NVIDIA L40S, `INFER_FAISS_GPU=1`) :
+
+| backbone | taille | coreset | banque | preprocess | embed | faiss | post | encode | scoring | FPS | AUROC |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| wideresnet50 | 224 px | p0.01 | 39 200 | 3,9 ms | 8,2 ms | 0,9 ms | 1,4 ms | 0,7 ms | 14,3 ms | 66,6 | 0,6375 |
+| wideresnet50 | 224 px | p0.02 | 78 400 | 3,9 ms | 8,2 ms | 1,8 ms | 1,4 ms | 0,7 ms | 15,2 ms | 62,7 | 0,6395 |
+| wideresnet50 | 224 px | p0.05 | 196 000 | 4,0 ms | 8,2 ms | 4,1 ms | 1,4 ms | 0,7 ms | 17,7 ms | 54,5 | 0,6406 |
+
 ## COCO + Open Images V7 — dataset fusionné « personne + couteau »
 
 Même protocole one-class que CelebA, mais l'anomalie est un couteau tenu par une
