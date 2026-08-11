@@ -103,6 +103,15 @@ def _timed_predict(instance, dataloader, device):
 
 # ─── Fit ───────────────────────────────────────────────────────────────────
 
+# torchvision expose plus de ResNet que _BACKBONES amont n'en déclare. On les
+# enregistre au chargement plutôt que de modifier patchcore/ : ce sont les seuls
+# backbones assez légers pour tenir le budget CPU (cf. « Cadence live »).
+for _name in ("resnet18", "resnet34"):
+    patchcore.backbones._BACKBONES.setdefault(
+        _name, "models.{}(pretrained=True)".format(_name)
+    )
+
+
 def _sampler(name, pct, device, proj_dim):
     if name == "identity":
         return patchcore.sampler.IdentitySampler()
