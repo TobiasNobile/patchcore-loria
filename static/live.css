@@ -83,6 +83,9 @@ button:disabled { opacity: .35; cursor: default; }
 #cam[hidden] { display: none; }
 #placeholder { position: absolute; inset: 0; display: grid; place-items: center;
                color: var(--faint); font-size: 13px; }
+/* Un `display` explicite l'emporte sur l'attribut [hidden] : sans cette règle
+   le texte reste superposé au flux vidéo. Même raison pour #cam et #notice. */
+#placeholder[hidden] { display: none; }
 #flash { position: absolute; inset: 0; background: #fff; opacity: 0;
          pointer-events: none; }
 #flash.shoot { animation: shutter .3s ease-out; }
