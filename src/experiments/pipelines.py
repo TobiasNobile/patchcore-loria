@@ -26,13 +26,13 @@ import patchcore.sampler
 import patchcore.tracking
 import patchcore.utils
 from experiments.metrics import histogram_jaccard, normalized_wasserstein, t_test_scores
+from experiments.runtime import select_device
 
 LOGGER = logging.getLogger(__name__)
 
 COLOR_NORMAL = "#5B8FB9"
 COLOR_ANOMALY = "#E8A33D"
 
-GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 BATCH_SIZE = 8
 NUM_WORKERS = 8
 BINS = 50
@@ -64,7 +64,7 @@ def _faiss(prefix):
 
 
 def _load_bank(bank_dir, prefix):
-    device = patchcore.utils.set_torch_device(GPU)
+    device = select_device()
     on_gpu, threads = _faiss(prefix)
     instance, fit_config = patchcore.banks.load_bank(bank_dir, device, on_gpu, threads)
     patchcore.utils.fix_seeds(fit_config["seed"])
@@ -170,7 +170,7 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None)
     threads, save_root = cfg.pop("_faiss_threads"), cfg.pop("_models_dir")
     seed, imagesize = cfg["seed"], cfg["imagesize"]
 
-    device = patchcore.utils.set_torch_device(GPU)
+    device = select_device()
     patchcore.utils.fix_seeds(seed)
 
     dataset = spec.build(split="train", resize=cfg["resize"], imagesize=imagesize, seed=seed)

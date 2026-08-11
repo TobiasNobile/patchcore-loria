@@ -41,14 +41,13 @@ from torchvision import transforms
 
 import patchcore.banks
 import patchcore.utils
+from experiments.runtime import select_device, tune_faiss_small_batches
 
 LOGGER = logging.getLogger(__name__)
 
 # Petite banque : le temps de recherche faiss est linéaire en sa taille et pèse
 # lourd dans la cadence. --bank_dir pour arbitrer autrement.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
-
-GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
 # Échelle fixe, en score de patch. Un autoscale par image ferait clignoter la
 # heatmap et interdirait de comparer deux frames.
@@ -68,15 +67,6 @@ FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "y
 # Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault (cf.
 # patchcore/__init__.py). Coût négligeable : le temps est dans le backbone.
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
-
-
-def tune_faiss_small_batches():
-    """Sous 128 requêtes, faiss quitte le chemin BLAS pour une boucle bien plus
-    lente par requête — cas de layer4 seul ou d'une image sous 224 px. Réglage
-    global au process, ici plutôt que dans patchcore/ (amont non modifié)."""
-    import faiss
-
-    faiss.cvar.distance_compute_blas_threshold = 20
 
 
 def build_transform(fit_config):
@@ -177,7 +167,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
               help="Borne basse de couleur du heatmap.")
 def main(bank_dir, source, stride, zoom, threshold, flip, loop, vmax, vmin):
     tune_faiss_small_batches()
-    device = patchcore.utils.set_torch_device(GPU)
+    device = select_device()
 
     patchcore_instance, fit_config = patchcore.banks.load_bank(
         bank_dir, device, FAISS_ON_GPU, FAISS_NUM_WORKERS

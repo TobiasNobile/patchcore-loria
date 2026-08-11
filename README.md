@@ -138,6 +138,29 @@ CPU (Apple M-series, torch 4 threads / faiss 1) :
 | wideresnet50 | 224 px | p0.02 | 78 400 | 2,5 ms | 58,6 ms | 54,2 ms | 0,0 ms | 0,9 ms | 115,3 ms | 8,6 | 0,6395 |
 | wideresnet50 | 224 px | p0.05 | 196 000 | 2,4 ms | 52,7 ms | 133,4 ms | 2,4 ms | 1,0 ms | 190,9 ms | 5,2 | 0,6406 |
 | resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
+| resnet18 | 128 px | p0.01 | 12 800 | 1,9 ms | 6,7 ms | 4,5 ms | 1,1 ms | 0,4 ms | 14,2 ms | 68,4 | — |
+| resnet18 | 160 px | p0.01 | 20 000 | 2,1 ms | 8,4 ms | 10,2 ms | 0,9 ms | 0,6 ms | 21,4 ms | 45,5 | — |
+| resnet18 | 192 px | p0.01 | 28 800 | 2,2 ms | 10,5 ms | 16,5 ms | 1,3 ms | 0,7 ms | 30,4 ms | 32,1 | — |
+| resnet18 | 224 px | p0.01 | 39 200 | 2,3 ms | 12,8 ms | 27,4 ms | 1,4 ms | 0,9 ms | 43,9 ms | 22,3 | — |
+| resnet18 | 224 px | p0.005 | 19 600 | 2,3 ms | 12,8 ms | 13,6 ms | 1,4 ms | 0,9 ms | 30,2 ms | 32,0 | — |
+| resnet34 | 128 px | p0.01 | 12 800 | 1,9 ms | 11,3 ms | 4,6 ms | 1,2 ms | 0,4 ms | 19,0 ms | 51,4 | — |
+| resnet34 | 160 px | p0.01 | 20 000 | 2,1 ms | 13,9 ms | 9,9 ms | 1,1 ms | 0,6 ms | 27,0 ms | 36,3 | — |
+| resnet34 | 192 px | p0.01 | 28 800 | 2,2 ms | 16,8 ms | 16,3 ms | 1,7 ms | 0,7 ms | 37,1 ms | 26,4 | — |
+| resnet50 | 160 px | p0.01 | 20 000 | 2,1 ms | 19,0 ms | 9,8 ms | 0,9 ms | 0,6 ms | 31,9 ms | 30,8 | — |
+| resnet50 | 192 px | p0.01 | 28 800 | 2,2 ms | 23,9 ms | 16,3 ms | 1,3 ms | 0,7 ms | 43,7 ms | 22,5 | — |
+| resnet50 | 224 px | p0.01 | 39 200 | 2,3 ms | 29,6 ms | 27,2 ms | 1,2 ms | 0,9 ms | 60,4 ms | 16,3 | — |
+| wideresnet50 | 128 px | p0.01 | 12 800 | 2,3 ms | 28,7 ms | 4,6 ms | 0,8 ms | 0,4 ms | 36,5 ms | 27,1 | — |
+| wideresnet50 | 160 px | p0.01 | 20 000 | 2,1 ms | 34,8 ms | 9,9 ms | 2,1 ms | 0,6 ms | 48,9 ms | 20,2 | — |
+| wideresnet50 | 192 px | p0.01 | 28 800 | 2,2 ms | 45,2 ms | 16,4 ms | 1,3 ms | 0,7 ms | 65,2 ms | 15,2 | — |
+
+AUROC « — » : temps mesurés avec une banque synthétique de la taille exacte
+qu'aurait le fit correspondant (le coût d'un `IndexFlatL2` ne dépend que du
+nombre de vecteurs et de requêtes). Recoupé sur les deux banques réelles :
+42,6 vs 43,7 FPS et 11,3 vs 11,4 FPS. Seul l'AUROC demande un vrai fit.
+
+Device : `PATCHCORE_DEVICE` = `auto` (cuda sinon cpu) | `cpu` | `cuda[:N]` | `mps`.
+MPS est exclu de l'automatique — PatchCore y échoue sur le pooling adaptatif, et
+s'y révèle plus lent que le CPU (embed 29,8 contre 15,2 ms à 128 px).
 
 GPU (Grid'5000, NVIDIA L40S, `INFER_FAISS_GPU=1`) :
 
@@ -146,6 +169,22 @@ GPU (Grid'5000, NVIDIA L40S, `INFER_FAISS_GPU=1`) :
 | wideresnet50 | 224 px | p0.01 | 39 200 | 3,9 ms | 8,2 ms | 0,9 ms | 1,4 ms | 0,7 ms | 14,3 ms | 66,6 | 0,6375 |
 | wideresnet50 | 224 px | p0.02 | 78 400 | 3,9 ms | 8,2 ms | 1,8 ms | 1,4 ms | 0,7 ms | 15,2 ms | 62,7 | 0,6395 |
 | wideresnet50 | 224 px | p0.05 | 196 000 | 4,0 ms | 8,2 ms | 4,1 ms | 1,4 ms | 0,7 ms | 17,7 ms | 54,5 | 0,6406 |
+
+## Déploiement sur une scène réelle
+
+Les banques COCO/CelebA scorent surtout la nouveauté de scène. Sur un robot qui
+filme toujours le même environnement, fitter sur *cette* scène :
+
+```shell
+python bin/capture.py --out data/scene/normal  --count 400 --every 0.5
+python bin/capture.py --out data/scene/anomaly --count 60     # pour le seuil
+SCENE_PATH=data/scene python bin/scene/fit/memory_bank.py
+SCENE_PATH=data/scene python bin/scene/infer/histogram.py     # seuil à lire entre les modes
+python bin/live_web.py                                        # puis choisir la banque
+```
+
+Filmer le nominal sous toutes ses variations : tout ce qui n'est pas dans la
+banque sera scoré comme anormal.
 
 ## MLflow
 

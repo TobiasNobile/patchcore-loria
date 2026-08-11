@@ -16,7 +16,7 @@ segfault sur macOS (torch + faiss + libomp).
 Env :
     INFER_FAISS_THREADS=8   threads FAISS (défaut 1 sur macOS, 4 ailleurs)
     BENCH_TORCH_THREADS=10  threads torch pour le backbone (défaut : inchangé)
-    BENCH_DEVICE=cpu|cuda   force le device (défaut : cuda si dispo, sinon cpu)
+    PATCHCORE_DEVICE=cpu    auto | cpu | cuda[:N] | mps (défaut auto)
     INFER_FAISS_GPU=1       recherche FAISS sur GPU (nécessite faiss-gpu-cu12)
     BENCH_IMAGESIZE=160     taille d'entrée au lieu de celle du fit : les scores
                             perdent leur sens, les temps restent valides.
@@ -42,6 +42,7 @@ from live_camera import (  # isort: skip
     FAISS_ON_GPU,
     build_transform,
     preprocess,
+    select_device,
     tune_faiss_small_batches,
 )
 
@@ -68,13 +69,7 @@ def _median(fn):
 def measure(bank_dir):
     """Une ligne de mesures pour une banque. Renvoie un dict sérialisable."""
     tune_faiss_small_batches()
-    forced = os.environ.get("BENCH_DEVICE", "").lower()
-    if forced == "cpu":
-        device = torch.device("cpu")
-    else:
-        device = patchcore.utils.set_torch_device([0] if forced == "cuda" else [])
-        if forced != "cuda" and torch.cuda.is_available():
-            device = torch.device("cuda:0")
+    device = select_device()
     if os.environ.get("BENCH_TORCH_THREADS"):
         torch.set_num_threads(int(os.environ["BENCH_TORCH_THREADS"]))
 

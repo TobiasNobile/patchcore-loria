@@ -30,15 +30,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # abort libomp (« OMP: Error #179 ») — ne pas réordonner.
 from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
-    FAISS_ON_GPU,
-    GPU,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
     SMOOTH_WINDOW,
     build_transform,
     preprocess,
+    select_device,
     tune_faiss_small_batches,
 )
+
+from live_camera import FAISS_ON_GPU  # noqa: E402  défaut de la case à cocher
 
 import patchcore.banks
 import patchcore.utils
@@ -111,6 +112,7 @@ class Runner:
             "verdict": None,
             "error": None,
             "params": None,
+            "device": None,
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
@@ -218,9 +220,10 @@ class Runner:
         capture = None
         try:
             tune_faiss_small_batches()
-            device = patchcore.utils.set_torch_device(GPU)
+            device = select_device(params["device"])
             patchcore_instance, fit_config = patchcore.banks.load_bank(
-                params["bank_dir"], device, FAISS_ON_GPU, FAISS_NUM_WORKERS
+                params["bank_dir"], device,
+                params["faiss_gpu"], params["faiss_threads"],
             )
             patchcore.utils.fix_seeds(fit_config["seed"])
             transform = build_transform(fit_config)
@@ -241,6 +244,8 @@ class Runner:
                                else "p{:g}".format(fit_config.get("coreset_pct", 0)),
                     "layer": layer,
                 }
+
+            self._update(device=str(device))
 
             source = params["source"]
             capture = cv2.VideoCapture(int(source) if source.isdigit() else source)
@@ -397,6 +402,19 @@ PAGE = """<!doctype html>
       <output id="alphaval" for="alpha">0.71 · n^2.0</output>
     </div>
 
+    <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
+    <select id="device" name="device">
+      <option value="auto">auto</option><option value="cpu">cpu</option>
+      <option value="cuda">cuda</option>
+    </select>
+
+    <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche · 1 sur macOS (deadlock)</small></label>
+    <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="__FAISS_THREADS__">
+
+    <label for="faiss_gpu">FAISS sur GPU<small>⚠ exige une carte NVIDIA ET le paquet faiss-gpu ·
+      la banque doit tenir en VRAM · sans ça le démarrage échoue</small></label>
+    <div><input id="faiss_gpu" name="faiss_gpu" type="checkbox" style="width:auto"__FAISS_GPU__></div>
+
     <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
     <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
 
@@ -442,6 +460,9 @@ function readParams() {
     alpha: alphaExp(),  // le serveur attend l'exposant, pas la position du curseur
     threshold: t === '' ? null : parseFloat(t),
     loop: document.getElementById('loop').checked,
+    device: document.getElementById('device').value,
+    faiss_threads: parseInt(document.getElementById('faiss_threads').value || '1', 10),
+    faiss_gpu: document.getElementById('faiss_gpu').checked,
   };
 }
 
@@ -510,7 +531,8 @@ function apply(s) {
   else if (s.verdict) { v.textContent = s.verdict; v.className = s.verdict; }
   else { v.textContent = 'en cours'; v.className = 'idle'; }
   document.getElementById('meta').textContent = s.running
-    ? `${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames` : '';
+    ? `${s.device || '…'} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames`
+    : '';
   document.getElementById('error').textContent = s.error || '';
   // Paramètres figés tant que la boucle tourne (sauf ceux marqués .live : zoom,
   // vmax et alpha, ajustables à chaud). Changer les autres rendrait les scores
@@ -528,6 +550,18 @@ setInterval(refresh, 300);
 </body>
 </html>
 """
+
+
+def _faiss_gpu_unavailable():
+    """Message explicite plutôt qu'une AttributeError au chargement de la banque."""
+    import faiss
+
+    if not hasattr(faiss, "GpuIndexFlatL2"):
+        return ("FAISS sur GPU : le paquet installé est faiss-cpu. "
+                "Installer faiss-gpu-cu12, ou décocher.")
+    if faiss.get_num_gpus() == 0:
+        return "FAISS sur GPU : aucune carte NVIDIA visible. Décocher."
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -554,6 +588,8 @@ class Handler(BaseHTTPRequestHandler):
                 PAGE.replace("__BANKS__", options)
                 .replace("__ALPHA_EXP_MAX__", repr(HEATMAP_ALPHA_MAX))
                 .replace("__ALPHA_EXP_DEF__", repr(HEATMAP_ALPHA))
+                .replace("__FAISS_THREADS__", str(FAISS_NUM_WORKERS))
+                .replace("__FAISS_GPU__", " checked" if FAISS_ON_GPU else "")
             )
             self._send(200, page, "text/html; charset=utf-8")
         elif self.path == "/api/state":
@@ -610,6 +646,9 @@ class Handler(BaseHTTPRequestHandler):
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
                     "loop": bool(params.get("loop")),
+                    "device": str(params.get("device") or "auto"),
+                    "faiss_threads": max(1, int(params.get("faiss_threads") or FAISS_NUM_WORKERS)),
+                    "faiss_gpu": bool(params.get("faiss_gpu")),
                 }
             except (ValueError, KeyError, TypeError) as exc:
                 self._json({"error": "Paramètres invalides : {}".format(exc)}, 400)
@@ -617,6 +656,14 @@ class Handler(BaseHTTPRequestHandler):
             if not params["bank_dir"]:
                 self._json({"error": "Aucune banque sélectionnée."}, 400)
                 return
+            if params["device"].split(":")[0] not in ("auto", "cpu", "cuda"):
+                self._json({"error": "Device inconnu : {}".format(params["device"])}, 400)
+                return
+            if params["faiss_gpu"]:
+                err = _faiss_gpu_unavailable()
+                if err:
+                    self._json({"error": err}, 400)
+                    return
             ok, err = RUNNER.start(params)
             self._json({"ok": ok, "error": err})
         elif self.path == "/api/stop":
