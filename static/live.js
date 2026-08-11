@@ -43,6 +43,12 @@ function readParams() {
   };
 }
 
+// Ordres de grandeur du score de patch selon la couche extraite : l'échelle
+// change d'un facteur ~25 entre layer3 et layer4, un vmax repris d'une autre
+// couche donne une heatmap uniformément bleue ou saturée. Indicatif : la valeur
+// dépend aussi du backbone et de la taille d'image.
+const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 15, "l3-l4": 175 };
+
 // ─── Bandeau de banque ─────────────────────────────────────────────────────
 function showBank(dir) {
   const m = BANKS[dir];
@@ -65,6 +71,13 @@ function showBank(dir) {
     .filter(([, v]) => v)
     .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${v}</b></div>`)
     .join("");
+
+  const suggested = VMAX_HINT[m.layers];
+  $("vmaxhint").textContent = suggested
+    ? `${suggested} pour ${m.layers}` : "inconnu pour " + (m.layers || "?");
+  // Pré-remplit tant que la boucle ne tourne pas : en cours, l'utilisateur a
+  // peut-être déjà ajusté à la main.
+  if (suggested && !$("vmax").disabled) $("vmax").value = suggested;
 }
 
 // ─── Cycle de vie ──────────────────────────────────────────────────────────
@@ -139,8 +152,25 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   $("faiss_gpu").checked = cfg.faiss_gpu;
 
   BANKS = Object.fromEntries(cfg.banks.map((b) => [b.dir, b]));
+  // Groupées par dataset puis coreset. Un <select> n'imbrique pas les
+  // <optgroup>, d'où un groupe par couple. Le sampler et le coreset sont
+  // retirés du nom affiché : le groupe les porte déjà.
+  const groups = new Map();
+  cfg.banks.forEach((b) => {
+    const key = `${b.dataset} · ${b.coreset}`;
+    (groups.get(key) || groups.set(key, []).get(key)).push(b);
+  });
+  const pct = (b) => (b.coreset === "identity" ? Infinity : parseFloat(b.coreset.slice(1)));
+  const sorted = [...groups.entries()].sort((a, d) =>
+    a[0].split(" · ")[0].localeCompare(d[0].split(" · ")[0]) || pct(a[1][0]) - pct(d[1][0]));
   $("bank_dir").innerHTML = cfg.banks.length
-    ? cfg.banks.map((b) => `<option value="${b.dir}">${b.dir}</option>`).join("")
+    ? sorted.map(([label, list]) =>
+        `<optgroup label="${label}">` +
+        list.map((b) => {
+          const name = b.dir.split("/").pop()
+            .replace(/_(approx_|)greedy_coreset_p[\d.]+|_identity/, "");
+          return `<option value="${b.dir}">${name}</option>`;
+        }).join("") + "</optgroup>").join("")
     : '<option value="">aucune banque dans models/</option>';
   showBank($("bank_dir").value);
 
