@@ -18,9 +18,8 @@ import platform
 import resource
 import time
 
-# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
-# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
-# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
+# fait abort. À poser avant l'import de patchcore, qui charge faiss.
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -37,9 +36,7 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# CONFIG — à éditer avant de lancer.
-# --------------------------------------------------------------------------- #
+# ─── CONFIG ────────────────────────────────────────────────────────────────
 SEED = 0
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
@@ -51,9 +48,8 @@ if _env_ts:
     TRAIN_SUBSET = None if _env_ts.lower() in ("none", "all") else int(_env_ts)
 
 BACKBONE_NAME = "wideresnet50"
-# Couches du backbone. Défaut layer2+layer3. Env FIT_LAYERS (CSV) pour balayer les
-# couches seules : "layer2".."layer4" (WideResNet50 = ResNet -> layer1..layer4,
-# pas de layer5). La résolution des patches = celle de la 1re couche listée.
+# Env FIT_LAYERS (CSV) : layer1..layer4, pas de layer5. La résolution des patches
+# est celle de la 1re couche listée.
 _env_layers = os.environ.get("FIT_LAYERS")
 LAYERS_TO_EXTRACT_FROM = (
     [l.strip() for l in _env_layers.split(",") if l.strip()]
@@ -62,15 +58,12 @@ LAYERS_TO_EXTRACT_FROM = (
 PRETRAIN_EMBED_DIMENSION = 1024
 TARGET_EMBED_DIMENSION = 1024
 PATCHSIZE = 3
-# k du scoring (nb de plus proches voisins). Purement paramètre de requête : il
-# n'affecte ni la banque ni la RAM du fit, juste le score. Surchargeable par
-# FIT_NUM_NN, et re-surchargeable au scoring par HIST_NUM_NN.
+# Paramètre de requête : n'affecte ni la banque ni la RAM du fit, juste le score.
+# Env FIT_NUM_NN, re-surchargeable au scoring par HIST_NUM_NN.
 ANOMALY_SCORER_NUM_NN = int(os.environ.get("FIT_NUM_NN", "1"))
 
 # identity = pas de coreset : fit rapide, grosse banque, inférence lente.
-# approx_greedy_coreset compresse la banque à PERCENTAGE des features.
-# Surchargeable par FIT_SAMPLER (identity | greedy_coreset | approx_greedy_coreset)
-# pour balayer sampler et taille de banque sans éditer le script.
+# Env FIT_SAMPLER : identity | greedy_coreset | approx_greedy_coreset.
 SAMPLER_NAME = os.environ.get("FIT_SAMPLER", "approx_greedy_coreset")
 # Fraction des features gardée par le coreset. Surchargeable par FIT_CORESET_PCT.
 PERCENTAGE = 0.1
@@ -112,10 +105,8 @@ def build_tag():
     )
 
 
-# Dimension de la projection Johnson-Lindenstrauss du coreset. C'est ELLE qui
-# fixe la VRAM au fit : projected = N_patches x DIM x 4 o, tout sur le GPU d'un
-# bloc. 128 (défaut papier) = 40 Go à 100k images -> OOM sur 44 Go. 64 -> 20 Go,
-# large, distances J-L à peine dégradées. Surchargeable par FIT_CORESET_PROJ_DIM.
+# Projection Johnson-Lindenstrauss du coreset : c'est elle qui fixe la VRAM du
+# fit (N_patches x DIM x 4 o, en un bloc sur le GPU). Env FIT_CORESET_PROJ_DIM.
 CORESET_PROJ_DIM = int(os.environ.get("FIT_CORESET_PROJ_DIM", "128"))
 
 
@@ -180,9 +171,7 @@ def main():
 
     bank = patchcore_instance.anomaly_scorer.detection_features
     bank_size = int(len(bank))
-    # Pic de RAM du process (ru_maxrss : Ko sur Linux, octets sur macOS). C'est
-    # le facteur limitant de l'expé de montée en taille de banque (nuage 1024-dim
-    # + index FAISS, tous deux en RAM CPU). En Go pour lecture directe.
+    # ru_maxrss : Ko sur Linux, octets sur macOS.
     _maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     peak_rss_gb = _maxrss / (1024 ** 2 if platform.system() == "Linux" else 1024 ** 3)
     LOGGER.info(
@@ -222,10 +211,8 @@ def main():
     }
     save_dir = os.path.join(MODELS_DIR, build_tag())
     if os.environ.get("FIT_NO_SAVE", "").lower() in ("1", "true", "yes"):
-        # Expé de montée en taille : une banque identity peut peser des centaines
-        # de Go. On ne veut que les mesures (taille, pic RAM, temps), pas persister
-        # le monstre -> on écrit juste le fit_config.json (léger) et on saute
-        # l'index FAISS + les params.
+        # Mesures seules (une banque identity peut peser des centaines de Go) :
+        # fit_config.json, ni index FAISS ni params.
         os.makedirs(save_dir, exist_ok=True)
         with open(os.path.join(save_dir, "fit_config.json"), "w") as fh:
             json.dump(config, fh, indent=2)

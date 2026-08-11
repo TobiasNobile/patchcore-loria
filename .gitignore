@@ -11,12 +11,7 @@ mlruns.db.bak-*
 .env
 results
 
-# Memory banks written by bin/<dataset>/fit/memory_bank.py. The pretrained MVTec
-# models under models/mvtec/ stay tracked; these are rebuildable and large
-# (a 10% bank over 2000 images is ~640 MB of FAISS index).
+# Banques écrites par bin/<dataset>/fit/memory_bank.py : reconstructibles et
+# volumineuses (une banque 10 % sur 2000 images = ~640 Mo d'index FAISS).
 models/celeba/
-models/atr/
-models/sohas/
 models/coco/
-models/merged/
-models/weapon/

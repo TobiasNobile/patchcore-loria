@@ -17,9 +17,8 @@ import os
 import platform
 import time
 
-# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
-# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
-# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
+# fait abort. À poser avant l'import de patchcore, qui charge faiss.
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -41,12 +40,8 @@ LOGGER = logging.getLogger(__name__)
 COLOR_NORMAL = "#5B8FB9"
 COLOR_ANOMALY = "#E8A33D"
 
-# --------------------------------------------------------------------------- #
-# CONFIG — édite ici, puis lance le script.
-# --------------------------------------------------------------------------- #
-# Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
-# BANK_DIR et OUTPUT_PATH surchargeables par HIST_BANK_DIR / HIST_OUTPUT_PATH,
-# pour scorer plusieurs banques dans un même job.
+# ─── CONFIG ────────────────────────────────────────────────────────────────
+# Env HIST_BANK_DIR / HIST_OUTPUT_PATH pour scorer plusieurs banques en un job.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 
 OUTPUT_PATH = "results/celeba/histograms/hist_celeba.png"
@@ -62,9 +57,7 @@ BINS = 50
 TEST_BATCH_SIZE = 8
 NUM_WORKERS = 8
 
-# La recherche FAISS domine le scoring et croît avec la banque (~14 s par batch
-# de 8 pour 78k vecteurs sur CPU). HIST_FAISS_GPU=1 la bascule sur GPU, index
-# alors entièrement en mémoire GPU (4 Ko par vecteur).
+# HIST_FAISS_GPU=1 bascule la recherche sur GPU, index entièrement en VRAM.
 FAISS_ON_GPU = os.environ.get("HIST_FAISS_GPU", "").lower() in ("1", "true", "yes")
 FAISS_NUM_WORKERS = int(os.environ.get("HIST_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
@@ -291,9 +284,8 @@ def main(n_per_class):
     plt.close()
     LOGGER.info("Saved histogram to %s", OUTPUT_PATH)
 
-    # Sidecar JSON garanti, MLflow best-effort : le file store sur NFS lève un
-    # "Stale file handle" quand des tâches parallèles se disputent le verrou, et
-    # ne doit pas détruire un résultat déjà écrit.
+    # Sidecar JSON garanti, MLflow best-effort : son file store sur NFS lève un
+    # "Stale file handle" quand des tâches parallèles se disputent le verrou.
     metrics = {
         "jaccard": jac["jaccard"],
         "jaccard_intersection": jac["intersection"],

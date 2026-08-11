@@ -1,61 +1,22 @@
 #!/usr/bin/env bash
 #
-# grid5000_run.sh — Équivalent Grid'5000 de remote_run.sh : sync le code local
-# vers la frontale, réserve un nœud GPU, exécute un script Python dessus en
-# affichant la sortie en direct, puis rapatrie les résultats.
+# grid5000_run.sh — sync le code vers la frontale Grid'5000, réserve un nœud GPU,
+# y exécute un script, rapatrie les résultats. Prérequis : l'alias `<site>.g5k`
+# dans ~/.ssh/config (config officielle G5K) et `uv sync` sur la frontale.
 #
 # Usage:
-#   ./grid5000_run.sh                                       # lance le script par défaut
-#   ./grid5000_run.sh bin/celeba/fit/memory_bank.py         # construit la banque mémoire
-#   ./grid5000_run.sh bin/celeba/infer/heatmap.py --image_index 900
+#   ./grid5000_run.sh bin/celeba/fit/memory_bank.py
 #   ./grid5000_run.sh bin/celeba/infer/histogram.py --n_per_class 200
+#   DETACH=true ./grid5000_run.sh ...   # soumet et rend la main
+#   ./grid5000_run.sh --fetch           # rapatrie un job détaché terminé
 #
-#   DETACH=true ./grid5000_run.sh bin/celeba/fit/memory_bank.py
-#       Soumet le job et rend la main IMMÉDIATEMENT (rien à garder ouvert : ni
-#       terminal, ni connexion, ni ordinateur allumé). Pour un run long/nocturne.
-#   ./grid5000_run.sh --fetch
-#       Ne lance rien : rapatrie les résultats d'un job détaché déjà terminé.
-#
-# Prérequis, une seule fois.
-#
-# 1) Dans ~/.ssh/config, la config officielle Grid'5000 (sinon la passerelle
-#    coupe les transferts un peu longs) :
-#
-#      Host g5k
-#        User <login>
-#        Hostname access.grid5000.fr
-#        ServerAliveInterval 30
-#      Host *.g5k
-#        User <login>
-#        ProxyCommand ssh g5k -W "$(basename %h .g5k):%p"
-#        ServerAliveInterval 30
-#
-#    Elle donne `ssh nancy.g5k`, ce que ce script utilise.
-#
-# 2) Sur la frontale : cd ~/patchcore-inspection && uv sync
-#
-# 3) Toujours sur la frontale, pré-télécharger CelebA (~22 Go) — le /home est
-#    partagé en NFS avec les nœuds, donc le job GPU n'aura plus qu'à calculer :
-#      uv run python -c "from datasets import load_dataset; load_dataset('flwrlabs/celeba')"
-#
-# Le fit n'a PAS besoin de faiss-gpu (le coreset tourne sur PyTorch/CUDA).
-# `uv pip install faiss-gpu-cu12` ne sert qu'à accélérer l'inférence, plus tard.
-#
-# Clusters GPU de Nancy, par compute capability (OAR_PROPERTIES filtre >= 7.5) :
-#   grele       GTX 1080 Ti      cc 6.1   INCOMPATIBLE (et c'est le plus dispo)
-#   gratouille  Tesla V100       cc 7.0   INCOMPATIBLE
-#   graffiti    RTX 2080 Ti      cc 7.5   ok
-#   grue        Tesla T4         cc 7.5   ok
-#   grat        A100 40 Go       cc 8.0   ok, très demandé
-#   grouille    A100 40 Go       cc 8.0   ok
-#   gruss       A40              cc 8.6   ok
-#   gres        L40S             cc 8.9   ok
+# Env : OAR_RESOURCES, OAR_WALLTIME, OAR_PROPERTIES (ex. cluster='gres'),
+#       REMOTE_ENV (variables passées au script distant).
 #
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────
-# Le login Grid'5000 n'apparaît pas ici : il est dans ~/.ssh/config (cf. les
-# prérequis en tête de fichier), qui définit l'alias `<site>.g5k`.
+# Le login est dans ~/.ssh/config, qui définit l'alias `<site>.g5k`.
 G5K_SITE="nancy"
 
 # Queue des clusters accessibles au groupe 'orpailleur' à Nancy (cf. le message
@@ -64,22 +25,19 @@ OAR_QUEUE="abaca"
 OAR_GPU=1
 OAR_WALLTIME="${OAR_WALLTIME:-03:00:00}"
 
-# Un seul GPU par défaut = une fraction de la RAM sur les nœuds multi-GPU.
-# OAR_RESOURCES="host=1" réserve le nœud entier, nécessaire au-delà de
-# ts=20000 (~60 Go rien que pour le nuage de features).
+# OAR_RESOURCES="host=1" réserve le nœud entier (toute la RAM), nécessaire
+# au-delà de ts=20000.
 OAR_RESOURCES="${OAR_RESOURCES:-gpu=${OAR_GPU}}"
 
-# PyTorch exige sm_75+ ; en dessous, la 1re convolution meurt sur un message
-# trompeur ("GET was unable to find an engine"). Comparaison textuelle : sûre
-# tant que la majeure tient en un chiffre (cc 10.x serait écarté à tort).
+# PyTorch exige sm_75+ ; en dessous la 1re convolution meurt sur un message
+# trompeur. Comparaison textuelle : fausse dès qu'une majeure passe à 2 chiffres.
 OAR_PROPERTIES="${OAR_PROPERTIES:-gpu_compute_capability >= '7.5'}"
 
 REMOTE_DIR="patchcore-inspection"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# MLflow : pas de base parallèle. On rapatrie la base + artefacts du serveur dans
-# un dossier temporaire, puis on IMPORTE les runs dans la base locale unique
-# (mlruns.db) via tools/mlflow_import.py — origine "g5k". Idempotent.
+# Pas de base MLflow parallèle : la base distante est importée dans mlruns.db
+# par tools/mlflow_import.py, taguée "g5k". Idempotent.
 IMPORT_TMP=".mlflow_import/g5k"
 IMPORT_ORIGIN="g5k"
 LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
@@ -90,16 +48,15 @@ LOCAL_PYTHON="${LOCAL_DIR}/.venv/bin/python"
 FETCH_BANKS="${FETCH_BANKS:-false}"
 
 # Dataset ciblé, pour ne rapatrier que les banques du bon dossier models/<dataset>/
-# (celeba, atr, sohas...). N'affecte que --fetch / FETCH_BANKS.
+# (celeba, coco...). N'affecte que --fetch / FETCH_BANKS.
 DATASET="${DATASET:-celeba}"
 
 # true = soumet le job et rend la main tout de suite, sans suivre la sortie.
 # Le job survit à la fermeture du terminal : c'est OAR qui l'exécute, pas toi.
 DETACH="${DETACH:-false}"
 
-# Variables d'env passées AU JOB (les variables locales ne le suivent pas). À
-# écrire avec des guillemets doubles, ex :
-#   REMOTE_ENV='SIZES="1000 2000" PCTS="0.1" N_PER_CLASS=300'
+# Passées AU JOB (l'env local ne le suit pas), guillemets doubles à l'intérieur :
+#   REMOTE_ENV='SIZES="1000 2000" N_PER_CLASS=300'
 REMOTE_ENV="${REMOTE_ENV:-}"
 
 # Script à exécuter côté serveur (par défaut, ou 1er argument), le reste des
@@ -193,9 +150,8 @@ fi
 echo "Réservation d'un nœud GPU (queue ${OAR_QUEUE}, gpu=${OAR_GPU}, walltime=${OAR_WALLTIME})..."
 echo "    puis exécution de ${SCRIPT}${QUOTED_ARGS}"
 
-# Pas d'équivalent bloquant de `srun` sous OAR (`oarsub -I` n'accepte pas de
-# commande) : job passif, puis suivi de sa sortie jusqu'à ce qu'il quitte
-# Waiting/Launching/Running.
+# Pas d'équivalent bloquant de `srun` sous OAR : job passif, puis suivi de sa
+# sortie jusqu'à ce qu'il quitte la file.
 # shellcheck disable=SC2029  # on veut bien l'expansion locale des variables
 "${SSH_FRONTEND[@]}" bash -s <<REMOTE_SCRIPT
 set -euo pipefail

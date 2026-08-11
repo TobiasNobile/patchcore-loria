@@ -34,9 +34,7 @@ LOGGER = logging.getLogger(__name__)
 COLOR_NORMAL = "#5B8FB9"
 COLOR_ANOMALY = "#E8A33D"
 
-# --------------------------------------------------------------------------- #
-# CONFIG — édite ici, puis lance le script.
-# --------------------------------------------------------------------------- #
+# ─── CONFIG ────────────────────────────────────────────────────────────────
 BANK_DIR = "models/coco/wideresnet50_approx_greedy_coreset_p0.05_ts20000_s0"
 OUTPUT_PATH = "results/coco/histograms/hist_coco.png"
 

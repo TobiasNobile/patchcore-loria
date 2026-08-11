@@ -7,7 +7,7 @@ fit_config.json de la banque : une requête encodée autrement que la banque
 donnerait des distances qui ne veulent rien dire.
 
     python bin/live_camera.py                          # webcam 0, banque par défaut
-    python bin/live_camera.py --bank_dir models/atr/…  # une autre banque
+    python bin/live_camera.py --bank_dir models/coco/…  # une autre banque
     python bin/live_camera.py --source rtsp://…        # caméra IP
     python bin/live_camera.py --source clip.mp4 --loop # rejouer un fichier
 
@@ -27,16 +27,15 @@ import platform
 import time
 from collections import deque
 
-# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
-# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
-# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
+# fait abort. À poser avant l'import de patchcore, qui charge faiss.
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import click
 import cv2
 import numpy as np
-import torch
+import torch  # noqa: F401  avant patchcore/faiss : l'ordre inverse fait abort libomp
 from PIL import Image
 from torchvision import transforms
 
@@ -45,9 +44,8 @@ import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
 
-# Petite banque : le temps de recherche faiss est linéaire en taille de banque
-# et décide seul de la cadence (39 200 features -> 8 fps, 784 000 -> 0,6).
-# --bank_dir pour arbitrer autrement.
+# Petite banque : le temps de recherche faiss est linéaire en sa taille et pèse
+# lourd dans la cadence. --bank_dir pour arbitrer autrement.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
 
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
@@ -82,7 +80,7 @@ def tune_faiss_small_batches():
 
 
 def build_transform(fit_config):
-    """Le prétraitement exact des datasets (celeba.py / atr.py), relu du fit."""
+    """Le prétraitement exact des datasets (celeba.py / coco.py), relu du fit."""
     return transforms.Compose(
         [
             transforms.Resize(fit_config["resize"]),

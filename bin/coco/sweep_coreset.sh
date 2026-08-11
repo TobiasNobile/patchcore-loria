@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
 #
-# sweep_coreset.sh — enchaîne plusieurs fit_and_score.sh COCO à coresets
-# différents dans UN SEUL job OAR.
-#
-# Pourquoi un seul job plutôt que N soumissions : grid5000_run.sh écrit son
-# lanceur sous un nom fixe (.oar_launch.sh) sur la frontale. Deux `DETACH=true`
-# coup sur coup, et le second écrase le script du premier avant qu'OAR ne l'ait
-# démarré — le premier job tournerait avec la config du second.
-#
-# Le fetch COCO du second tour est quasi gratuit : coco_fetch.py saute les
-# images déjà sur /tmp, et la sélection est déterministe (même SEED).
+# sweep_coreset.sh — enchaîne des fit_and_score.sh COCO à coresets différents
+# dans UN SEUL job. Deux DETACH=true coup sur coup s'écraseraient : grid5000_run.sh
+# écrit son lanceur sous un nom fixe sur la frontale.
 #
 #   REMOTE_ENV='PCTS="0.01 0.02" FIT_TRAIN_SUBSET=20000 FIT_LAYERS=layer3,layer4' \
 #   OAR_RESOURCES='host=1' OAR_WALLTIME=06:00:00 OAR_PROPERTIES="cluster='gres'" \

@@ -53,6 +53,11 @@ HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
 
 
+def clamp_alpha(value):
+    """Un exposant négatif inverserait la rampe et sortirait l'alpha de [0, 1]."""
+    return min(max(float(value), 0.0), HEATMAP_ALPHA_MAX)
+
+
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     """Vignette + heatmap jet, en BGR. vmin/vmax et alpha sont réglables en direct
     depuis la page (pur affichage, aucun effet sur les scores).
@@ -119,17 +124,14 @@ class Runner:
             s["live"] = dict(self._live)
             return s
 
-    def update_live(self, **fields):
+    def update_live(self, fields):
         """Zoom / échelle couleur / opacité, ajustables pendant que la boucle tourne."""
         with self._lock:
             for k in ("zoom", "vmin", "vmax"):
                 if fields.get(k) is not None:
                     self._live[k] = float(fields[k])
             if fields.get("alpha") is not None:
-                # Un exposant négatif inverserait la rampe et sortirait de [0, 1].
-                self._live["alpha"] = min(
-                    max(float(fields["alpha"]), 0.0), HEATMAP_ALPHA_MAX
-                )
+                self._live["alpha"] = clamp_alpha(fields["alpha"])
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
@@ -227,9 +229,8 @@ class Runner:
                     l.replace("layer", "l")
                     for l in fit_config.get("layers_to_extract_from", ["layer2", "layer3"])
                 )
-                # Sinon deux configurations incomparables se mélangeraient dans
-                # le même dossier de captures. Suffixe seulement si non standard,
-                # comme build_tag() du fit.
+                # Sinon deux configurations se mélangeraient dans le même dossier.
+                # Suffixe seulement si non standard, comme build_tag() du fit.
                 backbone = fit_config.get("backbone_name", "wideresnet50")
                 if backbone != "wideresnet50":
                     layer = "{}_{}".format(backbone, layer)
@@ -603,10 +604,9 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": float(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
-                    # `or` interdit ici : alpha=0 est une valeur voulue (heatmap pleine).
+                    # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
                     "alpha": HEATMAP_ALPHA if params.get("alpha") is None
-                             else min(max(float(params["alpha"]), 0.0),
-                                      HEATMAP_ALPHA_MAX),
+                             else clamp_alpha(params["alpha"]),
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
                     "loop": bool(params.get("loop")),
@@ -627,10 +627,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = json.loads(raw)
             except ValueError:
                 p = {}
-            RUNNER.update_live(
-                zoom=p.get("zoom"), vmin=p.get("vmin"), vmax=p.get("vmax"),
-                alpha=p.get("alpha"),
-            )
+            RUNNER.update_live(p)
             self._json({"ok": True})
         elif self.path == "/api/snapshot":
             path = RUNNER.snapshot()

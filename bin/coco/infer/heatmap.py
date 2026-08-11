@@ -25,9 +25,7 @@ from patchcore.datasets.coco import CocoDataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# CONFIG — à éditer avant de lancer.
-# --------------------------------------------------------------------------- #
+# ─── CONFIG ────────────────────────────────────────────────────────────────
 BANK_DIR = "models/coco/wideresnet50_approx_greedy_coreset_p0.05_ts20000_s0"
 BANK_DIR = os.environ.get("HIST_BANK_DIR", BANK_DIR)
 

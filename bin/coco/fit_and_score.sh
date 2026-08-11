@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
 #
-# fit_and_score.sh — Pipeline COCO « personne + couteau » en UN job OAR :
-#   1. fetch du sous-ensemble COCO sur le disque local du nœud (node-local, hors quota) ;
-#   2. fit de la banque (personne SANS couteau) -> PERSISTÉE dans le home ;
-#   3. histogramme good vs knife (test) ;
-#   4. 30 heatmaps (15 good + 15 knife).
+# fit_and_score.sh — COCO « personne + couteau » en UN job OAR : fetch sur le
+# /tmp du nœud, fit de la banque (personne SANS couteau), histogramme, heatmaps.
+# Seuls la banque et results/coco/ survivent au job.
 #
-# Les images COCO (~3-6 Go) vivent sur /tmp du nœud et meurent avec le job ; seuls
-# la banque (~3-6 Go, models/coco/) + histogramme + heatmaps (results/coco/) sont
-# gardés. Rapatriables par grid5000_run.sh --fetch.
-#
-# Cible par défaut : 20000 images, coreset 5%, proj 64, 3 NN.
 #   REMOTE_ENV="FIT_TRAIN_SUBSET=20000" \
 #   OAR_RESOURCES='host=1' OAR_WALLTIME=06:00:00 OAR_PROPERTIES="cluster='gres'" \
 #   DETACH=true ./grid5000_run.sh bin/coco/fit_and_score.sh

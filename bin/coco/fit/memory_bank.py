@@ -30,9 +30,7 @@ from patchcore.datasets.coco import CocoDataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# CONFIG — à éditer avant de lancer.
-# --------------------------------------------------------------------------- #
+# ─── CONFIG ────────────────────────────────────────────────────────────────
 SEED = 0
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
@@ -50,9 +48,8 @@ if _env_ts:
 
 # Env : FIT_BACKBONE (cf. _BACKBONES pour les noms acceptés).
 BACKBONE_NAME = os.environ.get("FIT_BACKBONE", "wideresnet50")
-# Couches du backbone. Défaut layer2+layer3. Env FIT_LAYERS (CSV) pour n'en prendre
-# qu'une : "layer2" (784 patches/img) ou "layer3" (196 patches/img, 4x plus léger).
-# La résolution des patches = celle de la 1re couche listée.
+# Env FIT_LAYERS (CSV). La résolution des patches est celle de la 1re couche
+# listée, donc layer2 en produit 4x plus que layer3.
 _env_layers = os.environ.get("FIT_LAYERS")
 LAYERS_TO_EXTRACT_FROM = (
     [l.strip() for l in _env_layers.split(",") if l.strip()]

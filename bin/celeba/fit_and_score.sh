@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 #
-# fit_and_score.sh (CelebA) — Fit + histogramme + 30 heatmaps (15 no-hat + 15 hat)
-# en UN job OAR. Banque persistée dans le home (models/celeba/<tag>).
-#
-# Balayage de couches : FIT_LAYERS="layer2" | "layer3" | "layer4" (WideResNet50 =
-# ResNet -> layer1..layer4, PAS de layer5). Défaut = layer2+layer3 (suffixe vide).
+# fit_and_score.sh (CelebA) — fit + histogramme + heatmaps en UN job OAR.
+# FIT_LAYERS : layer1..layer4 (pas de layer5), défaut layer2+layer3.
 #
 #   REMOTE_ENV="FIT_TRAIN_SUBSET=20000 FIT_LAYERS=layer4" \
 #   OAR_RESOURCES='host=1' OAR_WALLTIME=06:00:00 OAR_PROPERTIES="cluster='gres'" \

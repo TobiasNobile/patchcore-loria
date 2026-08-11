@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 #
-# remote_run.sh — Sync le code local vers le serveur distant, exécute un script Python
-# là-bas, puis rapatrie les résultats générés.
+# remote_run.sh — sync le code vers le DCE de Metz, exécute un script sur une
+# partition SLURM GPU, rapatrie les résultats.
 #
-# Usage:
-#   ./remote_run.sh                                     # lance le script par défaut
-#   ./remote_run.sh bin/celeba/fit/memory_bank.py       # construit la banque mémoire
+#   ./remote_run.sh bin/celeba/fit/memory_bank.py
 #   ./remote_run.sh bin/celeba/infer/heatmap.py --image_index 900
-#                                                       # arguments transmis au script Python
 #
 set -euo pipefail
 
@@ -17,9 +14,8 @@ REMOTE_HOST="dce.metz.centralesupelec.fr"
 REMOTE_DIR="~/patchcore-inspection"
 LOCAL_DIR="$HOME/dev/telecom/stage_1a/patchcore-inspection"
 
-# La passerelle SSH n'a pas de GPU : ils passent par une partition SLURM, d'où
-# `srun` (cf. https://dce.pages.centralesupelec.fr). gpu_inter est dispo H24,
-# plafonnée à 2h et 1 job — monter SLURM_TIME pour un run plus long.
+# La passerelle n'a pas de GPU, d'où `srun`. gpu_inter : dispo H24, plafonnée
+# à 2h et 1 job (cf. https://dce.pages.centralesupelec.fr).
 SLURM_PARTITION="gpu_inter"
 SLURM_TIME="02:00:00"
 
@@ -31,17 +27,15 @@ if [[ $# -gt 0 ]]; then
 fi
 SCRIPT_ARGS=("$@")
 
-# Exclus de l'envoi : gros fichiers, ou spécifiques à cette machine. mlruns.db
-# porte des artifact_location absolus qui pointeraient dans le vide côté
-# serveur.
+# Exclus : gros fichiers, ou spécifiques à cette machine (mlruns.db porte des
+# chemins absolus qui pointeraient dans le vide côté serveur).
 EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
           --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
           --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
           --exclude '.mlflow_import' --exclude '__pycache__' --exclude '.pytest_cache')
 
-# Pas de base MLflow parallèle : la base distante atterrit dans un dossier
-# temporaire, puis ses runs sont importés dans mlruns.db par
-# tools/mlflow_import.py, tagués origine "metz".
+# Pas de base MLflow parallèle : la base distante est importée dans mlruns.db
+# par tools/mlflow_import.py, taguée "metz".
 IMPORT_TMP=".mlflow_import/metz"
 IMPORT_ORIGIN="metz"
 
@@ -73,8 +67,7 @@ rsync -avz \
   "${LOCAL_DIR}/results/" 2>/dev/null || echo "  (pas de dossier results/ à rapatrier)"
 
 # ─── 4. MLflow distant -> import dans la base locale unique ───────────────
-# On rapatrie la base + artefacts en temporaire, puis mlflow_import.py re-crée les
-# runs dans mlruns.db (chemins régénérés). Idempotent : pas de doublon au réimport.
+# Idempotent : pas de doublon au réimport.
 echo "Récupération de la base MLflow distante (temporaire ${IMPORT_TMP})..."
 mkdir -p "${LOCAL_DIR}/${IMPORT_TMP}/mlruns"
 rsync -avz \

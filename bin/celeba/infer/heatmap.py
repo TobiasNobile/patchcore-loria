@@ -13,9 +13,8 @@ import os
 import platform
 import time
 
-# macOS : torch et faiss-cpu embarquent chacun leur libomp, la seconde à
-# s'initialiser fait abort. À poser avant l'import de patchcore, qui charge
-# faiss. Le mono-thread ci-dessous complète la parade (multi-thread = segfault).
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
+# fait abort. À poser avant l'import de patchcore, qui charge faiss.
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -30,10 +29,7 @@ from patchcore.datasets.celeba import CelebADataset, DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# CONFIG — à éditer avant de lancer.
-# --------------------------------------------------------------------------- #
-# Dossier écrit par bin/celeba/fit/memory_bank.py (MODELS_DIR/<tag>).
+# ─── CONFIG ────────────────────────────────────────────────────────────────
 BANK_DIR = os.environ.get(
     "HIST_BANK_DIR", "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts10000_s0"
 )
@@ -48,11 +44,8 @@ OUTPUT_PATH = os.environ.get("HEATMAP_OUTPUT_PATH", "results/celeba/heatmaps/ove
 
 GPU = [0]  # [] force le CPU (retombe sur CPU sans CUDA de toute façon).
 
-# None = autoscale par image : montre la structure, incomparable entre images.
-# Deux bornes fixes (p.ex. 0 et 10) = échelle commune pour un lot d'images.
-# Bornes de couleur du heatmap (scores = distances L2, échelle dépendante de la
-# couche : ~7 en layer3, ~15 en layer2, ~190 en layer4). Surchargeables par env
-# HEATMAP_VMIN / HEATMAP_VMAX pour recaler par couche.
+# Bornes de couleur. None = autoscale par image (incomparable d'une image à
+# l'autre) ; deux bornes fixes = échelle commune. Env HEATMAP_VMIN / VMAX.
 HEATMAP_VMIN = float(os.environ.get("HEATMAP_VMIN", "0"))
 HEATMAP_VMAX = float(os.environ.get("HEATMAP_VMAX", "10"))
 HEATMAP_ALPHA = 0.5
