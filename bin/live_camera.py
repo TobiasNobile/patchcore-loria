@@ -72,6 +72,18 @@ FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "y
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
 
+def tune_faiss_small_batches():
+    """Sous 128 requêtes, faiss 1.14 abandonne le chemin BLAS pour une boucle
+    ~20x plus lente PAR requête : chercher MOINS de patchs coûte alors plus cher
+    en absolu (mesuré : 100 requêtes = 307 ms contre 196 = 27 ms). Le défaut
+    (128000) fait basculer layer4 seul (49 patchs) et toute image sous 224 px.
+    20 est la valeur historique de faiss. Réglage global au process, appelé au
+    démarrage plutôt que patché dans patchcore/common.py (amont non modifié)."""
+    import faiss
+
+    faiss.cvar.distance_compute_blas_threshold = 20
+
+
 def build_transform(fit_config):
     """Le prétraitement exact des datasets (celeba.py / atr.py), relu du fit."""
     return transforms.Compose(
@@ -169,6 +181,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
 @click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
               help="Borne basse de couleur du heatmap.")
 def main(bank_dir, source, stride, zoom, threshold, flip, loop, vmax, vmin):
+    tune_faiss_small_batches()
     device = patchcore.utils.set_torch_device(GPU)
 
     patchcore_instance, fit_config = patchcore.banks.load_bank(
