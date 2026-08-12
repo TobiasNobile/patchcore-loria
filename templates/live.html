@@ -14,47 +14,39 @@
 </header>
 
 <main>
-  <!-- Gauche : ce qui exige de recharger la banque, donc figé pendant la boucle. -->
+  <!-- Gauche : constituer une banque. Hors ligne, coûteux, fait une fois. -->
   <section class="panel">
-    <h2>Session</h2>
-    <form id="params" autocomplete="off">
-      <label for="bank_dir">Banque</label>
-      <select id="bank_dir" name="bank_dir"></select>
+    <h2>Banque <span class="hint">construire</span></h2>
+    <form id="fit" autocomplete="off">
+      <label for="task">Tâche<small>nomme la banque, ex. DetectionKnife</small></label>
+      <input id="task" name="task" placeholder="DetectionKnife" required>
 
-      <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
-      <input id="source" name="source" value="0">
+      <label for="backbone">Backbone<small>plus lourd = mieux séparé, moins fluide</small></label>
+      <select id="backbone" name="backbone"></select>
 
-      <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
-      <select id="device" name="device">
-        <option value="auto">auto</option>
-        <option value="cpu">cpu</option>
-        <option value="cuda">cuda</option>
-      </select>
+      <label>Couches<small>où extraire les features ; l3 seule sépare souvent le mieux</small></label>
+      <div id="layers" class="checks"></div>
 
-      <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche</small></label>
-      <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="1">
+      <label for="coreset_pct">Coreset<small>fraction des patchs gardée en banque
+        (0,01 = 1 %)</small></label>
+      <input id="coreset_pct" name="coreset_pct" type="number"
+             min="0.001" max="1" step="0.005" value="0.01">
 
-      <label for="faiss_gpu" class="check">
-        <input id="faiss_gpu" name="faiss_gpu" type="checkbox">
-        <span>FAISS sur GPU<small>⚠ exige une carte NVIDIA et faiss-gpu</small></span>
-      </label>
+      <label for="train_subset">Images d'entraînement<small>tirage aléatoire dans
+        l'archive ; vide = toutes</small></label>
+      <input id="train_subset" name="train_subset" type="number" min="1" step="1"
+             placeholder="toutes">
 
-      <label for="stride">Stride<small>ne score qu'une frame sur N ; l'aperçu reste fluide</small></label>
-      <input id="stride" name="stride" type="number" min="1" step="1" value="20">
-
-      <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
-      <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
-
-      <label for="loop" class="check">
-        <input id="loop" name="loop" type="checkbox">
-        <span>Boucler<small>rejouer un fichier sans fin</small></span>
-      </label>
+      <label for="archive">Archive<small>zip d'images du nominal ; un dossier
+        anomaly/ est repris s'il existe</small></label>
+      <input id="archive" name="archive" type="file" accept=".zip,application/zip" required>
 
       <div class="actions">
-        <button id="start" type="submit">Démarrer</button>
-        <button id="stop" type="button" class="secondary" disabled>Arrêter</button>
+        <button id="dofit" type="submit">Fitter</button>
       </div>
-      <p id="error"></p>
+      <div id="fitbar" hidden><div id="fitfill"></div></div>
+      <p id="fitstatus"></p>
+      <p id="fiterror"></p>
     </form>
   </section>
 
@@ -72,16 +64,64 @@
     <div id="capture"></div>
   </section>
 
-  <!-- Droite : pur affichage, ajustable sans interrompre le scoring. -->
-  <section class="panel">
-    <h2>Affichage <span class="hint">réglable en direct</span></h2>
+  <!-- Droite : scorer en direct. Les champs .live s'ajustent sans interrompre. -->
+  <section class="panel" id="livepanel">
+    <h2>Direct <span class="hint">scorer</span></h2>
+    <form id="params" autocomplete="off">
+      <label for="bank_dir">Banque</label>
+      <select id="bank_dir" name="bank_dir"></select>
+
+      <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
+      <input id="source" name="source" value="0">
+
+      <label for="loop" class="check">
+        <input id="loop" name="loop" type="checkbox">
+        <span>Boucler<small>rejouer un fichier sans fin</small></span>
+      </label>
+
+      <div class="actions">
+        <button id="start" type="submit">Démarrer</button>
+        <button id="stop" type="button" class="secondary" disabled>Arrêter</button>
+      </div>
+      <p id="error"></p>
+
+      <!-- Masqués, mais gardés dans le DOM : /api/config les renseigne toujours,
+           donc INFER_FAISS_GPU / INFER_FAISS_THREADS restent effectifs, et
+           readParams() continue de les envoyer. Retirer `hidden` les rend. -->
+      <div id="advanced" hidden>
+        <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
+        <select id="device" name="device">
+          <option value="auto">auto</option>
+          <option value="cpu">cpu</option>
+          <option value="cuda">cuda</option>
+        </select>
+
+        <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche</small></label>
+        <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="1">
+
+        <label for="faiss_gpu" class="check">
+          <input id="faiss_gpu" name="faiss_gpu" type="checkbox">
+          <span>FAISS sur GPU<small>⚠ exige une carte NVIDIA et faiss-gpu</small></span>
+        </label>
+
+        <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
+        <input id="threshold" name="threshold" type="number" step="0.1" placeholder="aucun">
+      </div>
+    </form>
+
+    <h2 class="spaced">Affichage <span class="hint">réglable en direct</span></h2>
+
+    <label for="stride">Stride<small>ne score qu'une frame sur N ; l'aperçu reste fluide</small></label>
+    <div class="slider">
+      <input id="stride" class="live" type="number" min="1" step="1" value="20">
+    </div>
 
     <label for="zoom">Zoom<small>recadrage centré</small></label>
     <div class="slider">
       <input id="zoom" class="live" type="number" min="1" step="0.1" value="1">
     </div>
 
-    <label for="vmax">Échelle couleur<small>vmax de la heatmap · conseillé
+    <label for="vmax">Valeur max de normalisation de la heatmap<small>conseillé
       <span id="vmaxhint">—</span></small></label>
     <div class="slider">
       <input id="vmax" class="live" type="number" min="1" step="1" value="10">

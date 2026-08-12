@@ -115,15 +115,20 @@ def _sampler(name, pct, device, proj_dim):
     return kinds[name](pct, device, dimension_to_project_features_to=proj_dim)
 
 
-def fit_settings(models_dir, coreset_pct, train_subset):
-    """Les réglages du fit, tous surchargeables par l'environnement."""
+def fit_settings(models_dir, coreset_pct, train_subset, overrides=None):
+    """Les réglages du fit, tous surchargeables par l'environnement.
+
+    `overrides` l'emporte sur l'environnement : il porte des valeurs saisies
+    explicitement (l'interface web), là où les variables d'environnement sont
+    le réglage ambiant des scripts. Les clés valant None sont ignorées.
+    """
     subset = os.environ.get("FIT_TRAIN_SUBSET")
     if subset:
         train_subset = None if subset.lower() in ("none", "all") else int(subset)
     layers = os.environ.get("FIT_LAYERS")
     imagesize = int(os.environ.get("FIT_IMAGESIZE", "224"))
     on_gpu, threads = _faiss("FIT")
-    return {
+    settings = {
         "seed": 0,
         "train_subset": train_subset,
         "backbone_name": os.environ.get("FIT_BACKBONE", "wideresnet50"),
@@ -145,6 +150,12 @@ def fit_settings(models_dir, coreset_pct, train_subset):
         "_faiss_threads": threads,
         "_models_dir": os.environ.get("FIT_MODELS_DIR", models_dir),
     }
+    settings.update({k: v for k, v in (overrides or {}).items() if v is not None})
+    # `resize` est dérivé d'imagesize : le laisser au défaut après une surcharge
+    # d'imagesize donnerait un cadrage incohérent avec la banque.
+    if overrides and "imagesize" in overrides and "resize" not in overrides:
+        settings["resize"] = round(settings["imagesize"] * 256 / 224)
+    return settings
 
 
 def build_tag(cfg):
@@ -164,24 +175,70 @@ def build_tag(cfg):
     )
 
 
-def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None):
-    """Construit la banque sur le split TRAIN et l'écrit dans <models_dir>/<tag>."""
-    cfg = fit_settings(models_dir, coreset_pct, train_subset)
+class _ProgressLoader:
+    """Proxy d'itération sur le DataLoader, pour suivre l'avancement du fit.
+
+    PatchCore.fit() parcourt son argument sous tqdm et n'offre aucun rappel :
+    on s'insère ici plutôt que dans patchcore/, laissé conforme à l'amont. tqdm
+    appelle len() sur ce qu'il enveloppe, d'où le __len__.
+    """
+
+    def __init__(self, loader, n_images, callback):
+        self._loader = loader
+        self._n_images = n_images
+        self._callback = callback
+
+    def __len__(self):
+        return len(self._loader)
+
+    def __iter__(self):
+        batches = len(self._loader)
+        for i, batch in enumerate(self._loader, 1):
+            yield batch
+            # En images plutôt qu'en lots : c'est l'unité que l'utilisateur a
+            # saisie. Le dernier lot est incomplet, d'où le plafond.
+            self._callback(min(i * BATCH_SIZE, self._n_images), self._n_images)
+
+
+def _subset_indices(n_total, n_wanted, seed, random_subset):
+    """Les indices retenus pour le fit. Triés dans les deux cas : l'ordre de
+    parcours ne change rien au résultat, et un ordre croissant lit le disque
+    séquentiellement."""
+    if n_wanted is None or n_wanted >= n_total:
+        return None
+    if not random_subset:
+        return range(n_wanted)
+    rng = np.random.RandomState(seed)
+    return sorted(rng.choice(n_total, n_wanted, replace=False).tolist())
+
+
+def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
+            progress=None, random_subset=False, overrides=None,
+            num_workers=NUM_WORKERS):
+    """Construit la banque sur le split TRAIN et l'écrit dans <models_dir>/<tag>.
+
+    `progress(phase, done, total)` suit l'avancement (total nul = indéterminé).
+    `random_subset` tire les images au hasard plutôt que de prendre les
+    premières — sous le même seed, donc reproductible. `num_workers` à 0 charge
+    les images sur le thread appelant, sans processus fils. Renvoie le dossier
+    écrit.
+    """
+    cfg = fit_settings(models_dir, coreset_pct, train_subset, overrides)
     threads, save_root = cfg.pop("_faiss_threads"), cfg.pop("_models_dir")
     seed, imagesize = cfg["seed"], cfg["imagesize"]
+    notify = progress or (lambda *a: None)
 
     device = select_device()
     patchcore.utils.fix_seeds(seed)
 
     dataset = spec.build(split="train", resize=cfg["resize"], imagesize=imagesize, seed=seed)
-    if cfg["train_subset"] is not None:
-        dataset = torch.utils.data.Subset(
-            dataset, range(min(cfg["train_subset"], len(dataset)))
-        )
+    indices = _subset_indices(len(dataset), cfg["train_subset"], seed, random_subset)
+    if indices is not None:
+        dataset = torch.utils.data.Subset(dataset, indices)
     LOGGER.info("Fitting on %d %s train images.", len(dataset), spec.normal)
 
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS,
+        dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers,
         pin_memory=device.type == "cuda",
     )
 
@@ -207,7 +264,19 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
-    instance.fit(dataloader)
+    # La sélection du coreset suit l'extraction, dans le même appel et sans
+    # rappel possible : on bascule de phase au dernier lot. Total nul = barre
+    # indéterminée, faute de savoir combien de temps elle prendra.
+    n_images = len(dataset)
+
+    def _features_done(done, total):
+        if done >= total:
+            notify("coreset", 0, 0)
+        else:
+            notify("features", done, total)
+
+    notify("features", 0, n_images)
+    instance.fit(_ProgressLoader(dataloader, n_images, _features_done))
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     fit_seconds = time.perf_counter() - t0
@@ -238,6 +307,7 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None)
         "peak_rss_gb": peak_rss_gb,
         "fit_seconds": fit_seconds,
     }
+    notify("sauvegarde", 0, 0)
     save_dir = os.path.join(save_root, build_tag(cfg))
     if _env_flag("FIT_NO_SAVE"):
         # Mesures seules : une banque identity peut peser des centaines de Go.
@@ -247,6 +317,7 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None)
         LOGGER.info("FIT_NO_SAVE : banque non persistée, mesures dans %s", save_dir)
     else:
         patchcore.banks.save_bank(instance, save_dir, config)
+    return save_dir
 
 
 # ─── Histogramme ───────────────────────────────────────────────────────────

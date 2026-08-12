@@ -7,7 +7,9 @@ Code amont sous Apache 2.0, historique git conservé depuis le commit initial.
 **Retiré de l'amont** : les scripts MVTec (`bin/mvtec/`), les modèles pré-entraînés
 et les exemples `sample_*.sh`. `src/patchcore/` n'est pas modifié.
 
-**Ajouté** : les expériences one-class sur CelebA (chapeau) et COCO (couteau) dans
+**Ajouté** : l'interface web `main.py` (construire une banque depuis un zip
+d'images, puis scorer la webcam), le format de banque `coresets/*.pkg`, les
+expériences one-class sur CelebA (chapeau) et COCO (couteau) dans
 `bin/<dataset>/`, leurs pipelines partagés dans `src/experiments/`, le scoring
 webcam en direct (`bin/live_camera.py`, `bin/live_web.py`), le banc de mesure
 d'une frame (`bin/bench_live.py`), et les lanceurs Grid'5000 / DCE Metz.
@@ -31,6 +33,56 @@ If you use the code in this repository, please cite
 }
 ```
 
+## Démarrage rapide
+
+```shell
+python main.py            # puis ouvrir http://127.0.0.1:8000
+```
+
+Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
+un backbone, les couches, le taux de coreset, un zip d'images du nominal, et
+« Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
+— source, stride, échelle couleur et alpha se règlent pendant que ça tourne.
+
+Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
+endroit où torch est sûr sur macOS.
+
+### Les banques : `coresets/*.pkg`
+
+Une banque tient dans un fichier, et son nom dit sa configuration :
+
+```
+coresets/WideResNet50_DetectionKnife_l3-l4_p0.01_ts20000.pkg
+         backbone     tâche          couches coreset images de fit
+```
+
+C'est un zip de ce qu'écrit le fit (index faiss, paramètres, `fit_config.json`).
+Le fichier de config reste la référence : le nom n'en est qu'un résumé, lisible
+sans ouvrir l'archive. À côté du `.pkg`, un dossier de même nom garde les images
+qui ont servi — de quoi refitter autrement sans les renvoyer.
+
+Les deux sont gitignorés : un `.pkg` pèse de 80 Mo à 750 Mo, à distribuer en
+release plutôt qu'à committer (`git add -f` pour forcer une banque de démo).
+
+Une banque construite par les scripts de recherche s'y convertit sans refit :
+
+```shell
+python bin/pack_bank.py models/coco/wideresnet50_l3-l4_..._ts20000_s0 --task DetectionKnife
+```
+
+### Le zip d'images
+
+Des images à plat = tout est du nominal. Un zip contenant `normal/` et
+`anomaly/` garde la séparation, les contre-exemples ne servant qu'à calibrer un
+seuil. 20 % du nominal est réservé hors banque pour ce calibrage : envoyer 400
+images en met 320 dans la banque, et la page affiche les deux chiffres.
+
+Le coût du fit est dominé par la sélection du coreset, quadratique en nombre de
+patchs : quelques centaines d'images passent en secondes sur un portable, 20 000
+demandent des heures et un GPU. Pour une démo filmée sur place, quelques
+centaines d'images du décor réel valent mieux que des milliers d'images
+génériques (cf. « Déploiement sur une scène réelle » plus bas).
+
 ## Organisation des scripts et des sorties
 
 Deux axes : le dataset, puis la phase. Le fit est la moitié coûteuse et hors-ligne
@@ -38,22 +90,27 @@ Deux axes : le dataset, puis la phase. Le fit est la moitié coûteuse et hors-l
 et n'écrit que des figures et des mesures.
 
 ```
+main.py                     # l'interface web : fit + scoring live
+coresets/<nom>.pkg          # banques empaquetées (gitignoré)
+coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
+
 bin/
   celeba/  fit/memory_bank.py  infer/{heatmap,histogram}.py  fit_and_score.sh
   coco/    fit/memory_bank.py  infer/{heatmap,histogram}.py  fit_and_score.sh
            sweep_coreset.sh
   live_camera.py            # fenêtre OpenCV      | agnostiques : le dataset
-  live_web.py               # page sur localhost  | vient de --bank_dir
+  live_web.py               # l'app servie par main.py
   bench_live.py             # coût d'une frame, étape par étape
+  pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
 
 src/experiments/            # métriques et pipelines partagés par les datasets
 tools/                      # coco_fetch.py, mlflow_import.py
-models/<dataset>/<tag>/     # banques mémoire (gitignoré)
-results/<dataset>/<sortie>/ # figures et mesures (gitignoré)
+models/<dataset>/<tag>/     # banques mémoire des scripts de recherche (gitignoré)
+results/<tâche>/<sortie>/   # figures et mesures (gitignoré)
 ```
 
-Les scripts live déduisent de `--bank_dir` où écrire leurs captures
-(`models/coco/…` -> `results/coco/captures/<couche>/<coreset>/v<vmax>/`).
+Les scripts live déduisent de la banque où écrire leurs captures
+(`results/<tâche>/captures/<couche>/<coreset>/v<vmax>/`).
 
 ## CelebA — résumé des résultats
 

@@ -59,6 +59,25 @@ input:disabled, select:disabled { background: #f3f4f6; color: var(--faint); }
 label.check { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 14px; }
 label.check input { width: auto; margin-top: 2px; flex: none; }
 
+.panel h2.spaced { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+/* Couches du backbone : cases courtes, alignées sur une ligne si ça tient. */
+.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 14px; }
+.checks label.check { margin-bottom: 0; }
+input[type=file] { padding: 6px; font-size: 12px; }
+
+/* Avancement du fit. La phase sans compteur (sélection du coreset) n'a pas de
+   pourcentage honnête à afficher : barre pleine qui respire, pas un chiffre. */
+#fitbar { height: 6px; border-radius: 3px; background: var(--line);
+          overflow: hidden; margin-top: 12px; }
+#fitbar[hidden] { display: none; }
+#fitfill { height: 100%; width: 0; background: var(--ink); transition: width .3s; }
+#fitfill.pending { animation: breathe 1.4s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
+#fitstatus { color: var(--muted); font-size: 12px; min-height: 16px;
+             margin: 8px 0 0; word-break: break-all; }
+#fiterror { color: var(--bad); font-size: 12px; min-height: 16px; margin: 4px 0 0; }
+
 .slider { display: flex; align-items: center; gap: 10px; }
 .slider input[type=range] { padding: 0; border: none; background: none; }
 .slider output { color: var(--muted); font-size: 12px; min-width: 84px;

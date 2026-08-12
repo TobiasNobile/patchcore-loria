@@ -1,19 +1,26 @@
-"""Interface web locale pour scorer une webcam avec une banque PatchCore.
+"""Interface web locale : construire une banque PatchCore, puis scorer la webcam.
 
-Même boucle que bin/live_camera.py, sans fenêtre OpenCV : une page servie sur
-localhost affiche le seul score d'anomalie, et porte les paramètres comme le
-lancement. Serveur stdlib, à n'exposer que sur la loopback (pas d'auth).
+Deux moitiés, une par phase. À gauche on constitue une banque — un zip d'images
+du nominal, un backbone, des couches, un taux de coreset — et le fit écrit un
+`.pkg` dans coresets/. À droite on choisit une banque et on score la caméra en
+direct. Serveur stdlib, à n'exposer que sur la loopback (pas d'authentification).
 
-    python bin/live_web.py            # puis ouvrir http://127.0.0.1:8000
+    python main.py                    # puis ouvrir http://127.0.0.1:8000
+
+Le fit et la boucle de scoring s'excluent : tous deux tournent sur le thread
+principal, seul endroit où torch est sûr sur macOS.
 """
 
 import json
 import logging
 import os
 import platform
+import shutil
 import sys
+import tempfile
 import threading
 import time
+import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -42,13 +49,31 @@ from live_camera import (  # isort: skip
 from live_camera import FAISS_ON_GPU  # noqa: E402  défaut de la case à cocher
 
 import patchcore.banks
+import patchcore.common
+import patchcore.packaging
+import patchcore.uploads
 import patchcore.utils
+from experiments.datasets import SCENE
+from experiments.pipelines import run_fit
 
 LOGGER = logging.getLogger(__name__)
 
-MODELS_ROOT = "models"
+CORESETS_DIR = patchcore.packaging.CORESETS_DIR
 TEMPLATES_DIR = "templates"
 STATIC_DIR = "static"
+
+# Les backbones proposés au fit, du plus lourd au plus rapide. Restreint à trois
+# ResNet : PatchCore veut des cartes de features convolutives par couche, et ces
+# trois-là couvrent le compromis cadence/AUROC mesuré dans le README.
+FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
+FIT_LAYERS = ("layer1", "layer2", "layer3", "layer4")
+FIT_DEFAULT_LAYERS = ("layer2", "layer3")
+FIT_DEFAULT_CORESET_PCT = 0.01
+
+# Plafond du corps d'un upload. Un zip d'images de scène pèse quelques centaines
+# de Mo ; au-delà c'est une erreur de manipulation, et le refuser tôt évite de
+# remplir le disque avant de s'en apercevoir.
+MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 
 # Exposant du canal alpha (pas le poids de mélange de live_camera), injecté dans
 # la page avec son plafond : elle en déduit la course de son curseur 0→1.
@@ -80,21 +105,18 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
 
 
 def find_banks():
-    """Les banques de models/, avec de quoi renseigner le bandeau sans les charger."""
+    """Les .pkg de coresets/, avec de quoi renseigner le bandeau sans les charger.
+
+    Seul le fit_config.json est lu dans l'archive : l'index faiss pèse jusqu'au
+    gigaoctet et n'a rien à faire ici."""
     banks = []
-    for root, dirs, files in os.walk(MODELS_ROOT):
-        if "fit_config.json" not in files:
-            continue
-        dirs[:] = []  # une banque n'en contient pas une autre
-        try:
-            with open(os.path.join(root, "fit_config.json")) as fh:
-                cfg = json.load(fh)
-        except (OSError, ValueError):
-            continue
+    for entry in patchcore.packaging.find(CORESETS_DIR):
+        cfg = entry["config"]
         banks.append({
-            "dir": root,
-            "dataset": os.path.basename(os.path.dirname(os.path.normpath(root))),
-            "backbone": cfg.get("backbone_name", "?"),
+            "dir": entry["path"],
+            "name": entry["name"],
+            "task": cfg.get("task", ""),
+            "backbone": patchcore.packaging.backbone_label(cfg.get("backbone_name", "?")),
             "layers": "-".join(
                 l.replace("layer", "l")
                 for l in cfg.get("layers_to_extract_from", [])
@@ -106,25 +128,27 @@ def find_banks():
             "bank_gb": cfg.get("bank_gb", 0.0),
             "train_images": cfg.get("n_train_images"),
         })
-    return sorted(banks, key=lambda b: b["dir"])
+    return banks
 
 
 class Runner:
-    """Boucle de capture + scoring, pilotée par la page.
+    """Les deux travaux longs — construire une banque, scorer la caméra —
+    pilotés par la page.
 
-    Elle tourne sur le thread principal et le serveur HTTP en fond, jamais
+    Ils tournent sur le thread principal et le serveur HTTP en fond, jamais
     l'inverse : sur macOS torch abort si on le touche depuis un thread
-    secondaire. Les handlers HTTP ne font que déposer une demande ici, et
-    relisent l'état par polling (un dict sous verrou).
+    secondaire. C'est aussi ce qui les rend exclusifs l'un de l'autre, ce qui
+    tombe bien — un fit sature déjà la machine. Les handlers HTTP ne font que
+    déposer une demande ici, et relisent l'état par polling (un dict sous verrou).
     """
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._pending = None
+        self._pending = None  # (kind, params), déposé par un thread HTTP
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._jpeg = None  # dernière vignette encodée (overlay), servie en MJPEG et capturée
-        self._fit_meta = None  # {coreset, layer} de la banque, pour ranger les captures
+        self._bank_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
             "running": False,
             "score": None,
@@ -137,46 +161,56 @@ class Runner:
             "device": None,
             "device_note": None,
         }
+        # Avancement du fit. `total` nul = phase de durée inconnue (la sélection
+        # du coreset n'expose aucun compteur).
+        self._fit = {
+            "running": False, "phase": None, "done": 0, "total": 0,
+            "name": None, "error": None, "seconds": 0.0, "images": None,
+            "trained": None,
+        }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "alpha": HEATMAP_ALPHA,
+            "alpha": HEATMAP_ALPHA, "stride": 1,
         }
 
     def state(self):
         with self._lock:
             s = dict(self._state)
             s["live"] = dict(self._live)
+            s["fit"] = dict(self._fit)
             return s
 
     def update_live(self, fields):
-        """Zoom / échelle couleur / opacité, ajustables pendant que la boucle tourne."""
+        """Zoom / échelle couleur / opacité / stride, ajustables en marche."""
         with self._lock:
             for k in ("zoom", "vmin", "vmax"):
                 if fields.get(k) is not None:
                     self._live[k] = float(fields[k])
             if fields.get("alpha") is not None:
                 self._live["alpha"] = clamp_alpha(fields["alpha"])
+            if fields.get("stride") is not None:
+                self._live["stride"] = max(1, int(fields["stride"]))
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<dataset>/captures/<layer>/<coreset>/v<vmax>/cap_<ts>_s<curseur>_a<exposant>.jpg.
+        results/<tache>/captures/<layer>/<coreset>/v<vmax>/cap_<ts>_s<curseur>_a<exposant>.jpg.
 
         Ce qui définit une série est un dossier, ce qui varie d'une capture à
         l'autre est dans le nom."""
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
-            meta = self._fit_meta or {}
+            meta = self._bank_meta or {}
             alpha, vmax = self._live["alpha"], self._live["vmax"]
         if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
-        dataset = os.path.basename(os.path.dirname(os.path.normpath(bank))) or "live"
-        # Rangé par dataset / couche / coreset (lus du fit_config de la banque),
+        task = meta.get("task") or os.path.basename(bank).split("_")[0] or "live"
+        # Rangé par tâche / couche / coreset (lus du fit_config de la banque),
         # puis par vmax.
         out_dir = os.path.join(
-            "results", dataset, "captures",
+            "results", task, "captures",
             meta.get("layer", "l?"), meta.get("coreset", "p?"),
             "v{:g}".format(vmax),
         )
@@ -207,8 +241,10 @@ class Runner:
         with self._lock:
             if self._state["running"]:
                 return False, "Déjà en cours."
+            if self._fit["running"]:
+                return False, "Un fit est en cours — attendre qu'il finisse."
             self._stop.clear()
-            self._pending = params
+            self._pending = ("live", params)
             self._jpeg = None
             # running dès maintenant, pour que la page fige les champs sans
             # attendre que le thread principal ait chargé la banque.
@@ -222,12 +258,35 @@ class Runner:
                 "vmin": HEATMAP_VMIN,
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
                 "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
+                "stride": max(1, int(params.get("stride", 1))),
+            }
+        self._wake.set()
+        return True, None
+
+    def start_fit(self, params):
+        """Dépose une demande de fit. L'archive est déjà sur disque."""
+        with self._lock:
+            if self._state["running"]:
+                return False, "La caméra tourne — l'arrêter avant de fitter."
+            if self._fit["running"]:
+                return False, "Un fit est déjà en cours."
+            self._stop.clear()
+            self._pending = ("fit", params)
+            self._fit = {
+                "running": True, "phase": "préparation", "done": 0, "total": 0,
+                "name": None, "error": None, "seconds": 0.0, "images": None,
+                "trained": None,
             }
         self._wake.set()
         return True, None
 
     def stop(self):
+        """Arrête la boucle caméra, ou demande l'abandon d'un fit."""
         self._stop.set()
+
+    def _update_fit(self, **fields):
+        with self._lock:
+            self._fit.update(fields)
 
     def serve_forever(self):
         """Boucle du thread principal : attend une demande, la joue, recommence."""
@@ -235,16 +294,110 @@ class Runner:
             self._wake.wait()
             self._wake.clear()
             with self._lock:
-                params, self._pending = self._pending, None
-            if params is not None:
+                job, self._pending = self._pending, None
+            if job is None:
+                continue
+            kind, params = job
+            if kind == "fit":
+                self._fit_bank(params)
+            else:
                 self._run(params)
+
+    # ─── Fit ───────────────────────────────────────────────────────────────
+
+    def _fit_bank(self, params):
+        """Zip d'images -> banque -> coresets/<nom>.pkg.
+
+        Les images extraites restent à côté du .pkg : elles disent de quoi la
+        banque a été faite, et permettent de la refitter autrement sans avoir à
+        les renvoyer.
+        """
+        t0 = time.perf_counter()
+        staging = os.path.join(CORESETS_DIR, ".incoming-{}".format(int(t0 * 1000)))
+        pkg_path = None
+        try:
+            self._update_fit(phase="extraction")
+            counts = patchcore.uploads.extract_images(params["archive"], staging)
+            available = counts[patchcore.uploads.NORMAL]
+            # Le nom de la banque doit dire ce qui est réellement entré dedans :
+            # demander 20 000 images d'une archive qui en compte 400 donne une
+            # banque à 400, pas un fichier nommé ts20000.
+            subset = params["train_subset"]
+            subset = None if not subset else min(subset, available)
+            self._update_fit(images=available)
+
+            def progress(phase, done, total):
+                if self._stop.is_set():
+                    raise KeyboardInterrupt("Fit interrompu.")
+                self._update_fit(
+                    phase=phase, done=done, total=total,
+                    seconds=time.perf_counter() - t0,
+                )
+
+            # SCENE lit son dossier d'images dans SCENE_PATH ; `source` le
+            # réinscrit dans le fit_config pour l'inférence.
+            os.environ["SCENE_PATH"] = staging
+            bank_dir = run_fit(
+                SCENE, models_dir=staging, coreset_pct=FIT_DEFAULT_CORESET_PCT,
+                extra_config={"source": staging, "task": params["task"]},
+                progress=progress, random_subset=True,
+                # Pas de workers : ils démarrent par spawn sur macOS, chacun
+                # réimportant le module principal du serveur. Le décodage JPEG
+                # pèse ~10 % face au backbone, le jeu n'en vaut pas la chandelle.
+                num_workers=0,
+                overrides={
+                    "backbone_name": params["backbone"],
+                    "layers_to_extract_from": params["layers"],
+                    "coreset_pct": params["coreset_pct"],
+                    "train_subset": subset,
+                },
+            )
+
+            self._update_fit(phase="empaquetage", done=0, total=0)
+            with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
+                config = json.load(fh)
+            name = patchcore.packaging.build_name(config, params["task"])
+            pkg_path = patchcore.packaging.pack(bank_dir, os.path.join(CORESETS_DIR, name))
+
+            # Les images ne sont déplacées qu'une fois le .pkg écrit : un fit
+            # raté ne laisse pas un dossier d'images orphelin qui ressemblerait
+            # à une banque.
+            images_dir = os.path.join(CORESETS_DIR, name[: -len(patchcore.packaging.SUFFIX)])
+            shutil.rmtree(images_dir, ignore_errors=True)
+            shutil.rmtree(os.path.join(staging, os.path.basename(bank_dir)),
+                          ignore_errors=True)
+            os.replace(staging, images_dir)
+            staging = None
+
+            # `trained` < `images` : FolderDataset réserve 20 % du normal pour
+            # un éventuel calibrage de seuil. Affiché, sinon l'écart surprend.
+            self._update_fit(
+                running=False, phase="terminé", name=name,
+                trained=config.get("n_train_images"),
+                seconds=time.perf_counter() - t0,
+            )
+            LOGGER.info("Fit terminé : %s", pkg_path)
+        except KeyboardInterrupt as exc:
+            self._update_fit(running=False, phase=None, error=str(exc))
+            LOGGER.info("Fit interrompu à la demande.")
+        except Exception as exc:  # remonté tel quel dans la page
+            LOGGER.exception("Fit interrompu")
+            self._update_fit(running=False, phase=None, error=str(exc))
+        finally:
+            os.environ.pop("SCENE_PATH", None)
+            try:
+                os.remove(params["archive"])
+            except OSError:
+                pass
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
 
     def _run(self, params):
         capture = None
         try:
             tune_faiss_small_batches()
             device, device_note = resolve_device(params["device"])
-            patchcore_instance, fit_config = patchcore.banks.load_bank(
+            patchcore_instance, fit_config = patchcore.packaging.load(
                 params["bank_dir"], device,
                 params["faiss_gpu"], params["faiss_threads"],
             )
@@ -262,10 +415,11 @@ class Runner:
                     layer = "{}_{}".format(backbone, layer)
                 if fit_config.get("imagesize", 224) != 224:
                     layer = "{}_im{}".format(layer, fit_config["imagesize"])
-                self._fit_meta = {
+                self._bank_meta = {
                     "coreset": "identity" if fit_config.get("sampler_name") == "identity"
                                else "p{:g}".format(fit_config.get("coreset_pct", 0)),
                     "layer": layer,
+                    "task": patchcore.packaging.slugify(fit_config.get("task", ""), ""),
                 }
 
             self._update(device=str(device), device_note=device_note)
@@ -284,7 +438,6 @@ class Runner:
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
             )
             threshold = params["threshold"]
-            stride = params["stride"]
             frame_index = 0
             fps = 0.0
             infer_ms = 0.0
@@ -305,6 +458,7 @@ class Runner:
                     zoom = self._live["zoom"]
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
                     alpha = self._live["alpha"]
+                    stride = self._live["stride"]
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
@@ -410,8 +564,18 @@ class Handler(BaseHTTPRequestHandler):
                 "alpha_default": HEATMAP_ALPHA,
                 "faiss_threads": FAISS_NUM_WORKERS,
                 "faiss_gpu": FAISS_ON_GPU,
+                "backbones": [
+                    {"name": b, "label": patchcore.packaging.backbone_label(b)}
+                    for b in FIT_BACKBONES
+                ],
+                "layers": list(FIT_LAYERS),
+                "default_layers": list(FIT_DEFAULT_LAYERS),
+                "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
                 "banks": find_banks(),
             })
+        elif self.path == "/api/banks":
+            # Relu après un fit, pour peupler le sélecteur sans recharger la page.
+            self._json({"banks": find_banks()})
         elif self.path == "/api/state":
             self._json(RUNNER.state())
         elif self.path.startswith("/stream.mjpg"):
@@ -448,7 +612,81 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # onglet fermé ou rechargé
 
+    def _receive_fit(self):
+        """Reçoit l'archive d'images et lance le fit.
+
+        Le zip arrive en corps brut, les réglages en query string, plutôt qu'en
+        multipart : un corps brut se recopie sur disque par blocs sans jamais
+        tenir en mémoire, là où un multipart de plusieurs gigaoctets devrait
+        être découpé à la main.
+        """
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        def field(name, default=""):
+            return (query.get(name) or [default])[0]
+
+        try:
+            params = {
+                "task": patchcore.packaging.slugify(field("task")),
+                "backbone": field("backbone"),
+                "layers": [l for l in field("layers").split(",") if l],
+                "coreset_pct": float(field("coreset_pct") or FIT_DEFAULT_CORESET_PCT),
+                # 0 ou vide = toutes les images de l'archive.
+                "train_subset": int(field("train_subset") or 0),
+            }
+        except ValueError as exc:
+            self._json({"error": "Paramètres invalides : {}".format(exc)}, 400)
+            return
+
+        if params["backbone"] not in FIT_BACKBONES:
+            self._json({"error": "Backbone inconnu : {}".format(params["backbone"])}, 400)
+            return
+        unknown = [l for l in params["layers"] if l not in FIT_LAYERS]
+        if not params["layers"] or unknown:
+            self._json({"error": "Couches invalides : {}".format(
+                ", ".join(unknown) or "aucune sélectionnée")}, 400)
+            return
+        if not 0 < params["coreset_pct"] <= 1:
+            self._json({"error": "Le coreset doit être dans ]0, 1]."}, 400)
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            self._json({"error": "Aucune archive reçue."}, 400)
+            return
+        if length > MAX_UPLOAD_BYTES:
+            self._json({"error": "Archive de {:.1f} Go, au-delà de la limite de "
+                                 "{:.0f} Go.".format(length / 1024 ** 3,
+                                                     MAX_UPLOAD_BYTES / 1024 ** 3)}, 413)
+            return
+
+        fd, archive = tempfile.mkstemp(prefix="patchcore-upload-", suffix=".zip")
+        remaining = length
+        with os.fdopen(fd, "wb") as out:
+            while remaining > 0:
+                chunk = self.rfile.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break  # connexion coupée en cours d'envoi
+                out.write(chunk)
+                remaining -= len(chunk)
+        if remaining > 0:
+            os.remove(archive)
+            self._json({"error": "Envoi interrompu ({} octets manquants).".format(
+                remaining)}, 400)
+            return
+
+        params["archive"] = archive
+        ok, err = RUNNER.start_fit(params)
+        if not ok:
+            os.remove(archive)
+        self._json({"ok": ok, "error": err}, 200 if ok else 409)
+
     def do_POST(self):
+        # Traité avant toute lecture du corps : l'archive peut peser des
+        # gigaoctets et ne doit pas passer par la mémoire.
+        if self.path.split("?")[0] == "/api/fit":
+            self._receive_fit()
+            return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         if self.path == "/api/start":
@@ -475,6 +713,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not params["bank_dir"]:
                 self._json({"error": "Aucune banque sélectionnée."}, 400)
+                return
+            # La page n'est pas authentifiée : on n'ouvre que ce que coresets/
+            # contient réellement, pas un chemin quelconque venu de la requête.
+            if params["bank_dir"] not in {b["dir"] for b in find_banks()}:
+                self._json({"error": "Banque inconnue dans {}/.".format(CORESETS_DIR)}, 400)
                 return
             if params["device"].split(":")[0] not in ("auto", "cpu", "cuda"):
                 self._json({"error": "Device inconnu : {}".format(params["device"])}, 400)

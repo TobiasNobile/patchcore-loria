@@ -5,18 +5,11 @@ import os
 
 import torch
 
-import patchcore.backbones
+# Importé pour son effet de bord : y sont enregistrés les ResNet que _BACKBONES
+# amont ne déclare pas (resnet18, resnet34), dont le fit a besoin ici.
+import patchcore.banks  # noqa: F401
 
 LOGGER = logging.getLogger(__name__)
-
-# torchvision expose plus de ResNet que _BACKBONES amont n'en déclare. Enregistrés
-# ici plutôt que dans patchcore/ (amont non modifié) et plutôt que dans pipelines :
-# le chargement d'une banque en a besoin, y compris depuis live_web et bench_live
-# qui n'importent pas les pipelines.
-for _name in ("resnet18", "resnet34"):
-    patchcore.backbones._BACKBONES.setdefault(
-        _name, "models.{}(pretrained=True)".format(_name)
-    )
 
 
 def select_device(preferred=None):
