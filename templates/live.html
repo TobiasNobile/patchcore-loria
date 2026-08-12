@@ -37,9 +37,19 @@
       <input id="train_subset" name="train_subset" type="number" min="1" step="1"
              placeholder="toutes">
 
-      <label for="archive">Archive<small>zip d'images du nominal ; un dossier
-        anomaly/ est repris s'il existe</small></label>
-      <input id="archive" name="archive" type="file" accept=".zip,application/zip" required>
+      <label>Images du nominal<small>un sous-dossier anomaly/ est repris s'il
+        existe, et ne sert qu'à calibrer un seuil</small></label>
+      <div class="checks" id="srcmode">
+        <label class="check"><input type="radio" name="srcmode" value="zip" checked>
+          <span>Archive zip</span></label>
+        <label class="check"><input type="radio" name="srcmode" value="dir">
+          <span>Dossier d'images</span></label>
+      </div>
+      <input id="archive" type="file" accept=".zip,application/zip">
+      <!-- webkitdirectory : le navigateur ne livre jamais de chemin, seulement
+           les fichiers. La page en fait un zip avant l'envoi, ce qui reprend le
+           même trajet côté serveur. -->
+      <input id="folder" type="file" webkitdirectory multiple hidden>
 
       <div class="actions">
         <button id="dofit" type="submit">Fitter</button>

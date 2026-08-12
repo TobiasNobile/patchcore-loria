@@ -100,13 +100,135 @@ function selectedLayers() {
   return [...$("layers").querySelectorAll("input:checked")].map((c) => c.value);
 }
 
+const srcMode = () => document.querySelector('input[name="srcmode"]:checked').value;
+
+$("srcmode").addEventListener("change", () => {
+  const dir = srcMode() === "dir";
+  $("archive").hidden = dir;
+  $("folder").hidden = !dir;
+  $("fiterror").textContent = "";
+});
+
+// ─── Zip construit dans la page ────────────────────────────────────────────
+// Un dossier choisi arrive en liste de fichiers, jamais en chemin : on en fait
+// une archive ici pour que le serveur ne connaisse qu'un seul format d'entrée.
+// Stocké sans compression — ce sont des images déjà compressées, et le CRC est
+// la seule passe à payer.
+const IMAGE_RE = /\.(jpe?g|png|bmp)$/i;
+const ZIP_MAX_FILES = 65535;         // au-delà, il faut le Zip64
+const ZIP_MAX_BYTES = 3 * 1024 ** 3; // idem : les offsets tiennent sur 32 bits
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function le(view, offset, value, bytes) {
+  for (let i = 0; i < bytes; i++) view[offset + i] = (value >>> (8 * i)) & 0xff;
+}
+
+async function buildZip(files, onProgress) {
+  const encoder = new TextEncoder();
+  const parts = [];      // Uint8Array (en-têtes) et File (contenus, non copiés)
+  const central = [];
+  let offset = 0;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const name = encoder.encode(file.webkitRelativePath || file.name);
+    // Le CRC exige de lire les octets ; on ne garde qu'un fichier à la fois en
+    // mémoire, le Blob final restant adossé aux fichiers sur disque.
+    const crc = crc32(new Uint8Array(await file.arrayBuffer()));
+
+    const header = new Uint8Array(30 + name.length);
+    le(header, 0, 0x04034b50, 4);   // signature d'en-tête local
+    le(header, 4, 20, 2);           // version minimale
+    le(header, 6, 0x0800, 2);       // noms en UTF-8
+    le(header, 8, 0, 2);            // méthode 0 = stocké
+    le(header, 10, 0, 2);           // heure
+    le(header, 12, 0x0021, 2);      // date : 1980-01-01, faute de mieux portable
+    le(header, 14, crc, 4);
+    le(header, 18, file.size, 4);
+    le(header, 22, file.size, 4);
+    le(header, 26, name.length, 2);
+    header.set(name, 30);
+    parts.push(header, file);
+
+    const entry = new Uint8Array(46 + name.length);
+    le(entry, 0, 0x02014b50, 4);    // signature d'entrée centrale
+    le(entry, 4, 20, 2);
+    le(entry, 6, 20, 2);
+    le(entry, 8, 0x0800, 2);
+    le(entry, 10, 0, 2);
+    le(entry, 12, 0, 2);
+    le(entry, 14, 0x0021, 2);
+    le(entry, 16, crc, 4);
+    le(entry, 20, file.size, 4);
+    le(entry, 24, file.size, 4);
+    le(entry, 28, name.length, 2);
+    le(entry, 42, offset, 4);       // position de l'en-tête local
+    entry.set(name, 46);
+    central.push(entry);
+
+    offset += header.length + file.size;
+    if (onProgress) onProgress(i + 1, files.length);
+  }
+
+  const size = central.reduce((n, e) => n + e.length, 0);
+  const end = new Uint8Array(22);
+  le(end, 0, 0x06054b50, 4);        // fin du répertoire central
+  le(end, 8, files.length, 2);
+  le(end, 10, files.length, 2);
+  le(end, 12, size, 4);
+  le(end, 16, offset, 4);
+  return new Blob([...parts, ...central, end], { type: "application/zip" });
+}
+
+async function fitBody() {
+  if (srcMode() === "zip") {
+    const file = $("archive").files[0];
+    if (!file) throw new Error("Choisir une archive zip.");
+    return file;
+  }
+  const images = [...$("folder").files].filter((f) => IMAGE_RE.test(f.name));
+  if (!images.length) throw new Error("Aucune image (jpg, png, bmp) dans ce dossier.");
+  if (images.length > ZIP_MAX_FILES) {
+    throw new Error(`${images.length} images : au-delà de ${ZIP_MAX_FILES}, zipper le dossier à la main.`);
+  }
+  const bytes = images.reduce((n, f) => n + f.size, 0);
+  if (bytes > ZIP_MAX_BYTES) {
+    throw new Error(`${(bytes / 1024 ** 3).toFixed(1)} Go : au-delà de 3 Go, zipper le dossier à la main.`);
+  }
+  return buildZip(images, (done, total) => {
+    $("fitstatus").textContent = `archive en préparation ${done}/${total}`;
+  });
+}
+
 fitForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   $("fiterror").textContent = "";
-  const file = $("archive").files[0];
-  if (!file) { $("fiterror").textContent = "Choisir une archive."; return; }
   const layers = selectedLayers();
   if (!layers.length) { $("fiterror").textContent = "Choisir au moins une couche."; return; }
+
+  let body;
+  try {
+    body = await fitBody();
+  } catch (err) {
+    $("fiterror").textContent = err.message;
+    $("fitstatus").textContent = "";
+    return;
+  }
 
   const query = new URLSearchParams({
     task: $("task").value,
@@ -120,7 +242,7 @@ fitForm.addEventListener("submit", async (e) => {
   // avoir à découper un multipart de plusieurs gigaoctets.
   let res;
   try {
-    const r = await fetch("/api/fit?" + query, { method: "POST", body: file });
+    const r = await fetch("/api/fit?" + query, { method: "POST", body });
     res = await r.json();
   } catch (err) {
     res = { error: "Envoi interrompu : " + err };
