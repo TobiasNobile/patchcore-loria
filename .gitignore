@@ -12,6 +12,9 @@ mlruns.db.bak-*
 .env
 results
 
+# Images de scène et exports de datasets (bin/capture.py, tools/celeba_export.py)
+data/
+
 # Banques
 models/celeba/
 models/coco/

@@ -171,7 +171,7 @@ class Runner:
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "alpha": HEATMAP_ALPHA, "stride": 1,
+            "alpha": HEATMAP_ALPHA, "stride": 1, "averaging": False,
         }
 
     def state(self):
@@ -191,6 +191,8 @@ class Runner:
                 self._live["alpha"] = clamp_alpha(fields["alpha"])
             if fields.get("stride") is not None:
                 self._live["stride"] = max(1, int(fields["stride"]))
+            if fields.get("averaging") is not None:
+                self._live["averaging"] = bool(fields["averaging"])
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
@@ -259,6 +261,7 @@ class Runner:
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
                 "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
                 "stride": max(1, int(params.get("stride", 1))),
+                "averaging": bool(params.get("averaging")),
             }
         self._wake.set()
         return True, None
@@ -437,6 +440,12 @@ class Runner:
             heatmap = np.zeros(
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
             )
+            # Les N dernières cartes SCORÉES, et leur moyenne tenue à jour. La
+            # moyenne est recalculée à l'inférence et non à l'affichage : entre
+            # deux inférences la pile ne bouge pas, la refaire à chaque frame
+            # coûterait sans rien changer.
+            heatmaps = deque(maxlen=SMOOTH_WINDOW)
+            averaged = heatmap
             threshold = params["threshold"]
             frame_index = 0
             fps = 0.0
@@ -459,6 +468,7 @@ class Runner:
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
                     alpha = self._live["alpha"]
                     stride = self._live["stride"]
+                    averaging = self._live["averaging"]
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
@@ -473,12 +483,18 @@ class Runner:
                         else ("anomalie" if score >= threshold else "ok")
                     )
                     heatmap = np.asarray(batch_masks[0])
+                    heatmaps.append(heatmap)
+                    averaged = np.mean(heatmaps, axis=0)
                     self._update(score=score, infer_ms=infer_ms, verdict=verdict)
 
                 # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
-                # et garde la dernière heatmap entre deux inférences.
+                # et garde la dernière heatmap entre deux inférences. Le lissage
+                # ne touche que l'affichage — le score reste celui de la frame
+                # scorée, avec sa propre médiane glissante.
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, heatmap, vmin, vmax, alpha),
+                    ".jpg",
+                    overlay_heatmap(preview, averaged if averaging else heatmap,
+                                    vmin, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -571,6 +587,7 @@ class Handler(BaseHTTPRequestHandler):
                 "layers": list(FIT_LAYERS),
                 "default_layers": list(FIT_DEFAULT_LAYERS),
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
+                "smooth_window": SMOOTH_WINDOW,
                 "banks": find_banks(),
             })
         elif self.path == "/api/banks":
@@ -703,6 +720,7 @@ class Handler(BaseHTTPRequestHandler):
                              else clamp_alpha(params["alpha"]),
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
+                    "averaging": bool(params.get("averaging")),
                     "loop": bool(params.get("loop")),
                     "device": str(params.get("device") or "auto"),
                     "faiss_threads": max(1, int(params.get("faiss_threads") or FAISS_NUM_WORKERS)),

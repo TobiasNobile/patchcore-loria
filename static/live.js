@@ -38,6 +38,7 @@ function readParams() {
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
     alpha: alphaExp(),
+    averaging: $("averaging").checked,
     threshold: t === "" ? null : parseFloat(t),
     loop: $("loop").checked,
     device: $("device").value,
@@ -294,6 +295,9 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
     post("/api/update", { [id]: parseFloat($(id).value) }));
 });
 $("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
+// À part des champs numériques : une case se lit sur .checked, pas sur .value.
+$("averaging").addEventListener("change", () =>
+  post("/api/update", { averaging: $("averaging").checked }));
 
 $("snap").addEventListener("click", async () => {
   const res = await post("/api/snapshot");
@@ -381,6 +385,7 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
     <label class="check"><input type="checkbox" value="${l}"
       ${cfg.default_layers.includes(l) ? "checked" : ""}><span>${l}</span></label>`).join("");
   $("coreset_pct").value = cfg.default_coreset_pct;
+  $("smoothwin").textContent = cfg.smooth_window;
 
   fillBanks(cfg.banks);
 

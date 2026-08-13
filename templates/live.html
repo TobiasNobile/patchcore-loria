@@ -141,6 +141,12 @@
       <input id="vmax" class="live" type="number" min="1" step="1" value="10">
     </div>
 
+    <label for="averaging" class="check">
+      <input id="averaging" class="live" type="checkbox">
+      <span>Lissage<small>la heatmap affichée est la moyenne des
+        <b id="smoothwin">5</b> dernières frames scorées</small></span>
+    </label>
+
     <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
     <div class="slider">
       <input id="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
