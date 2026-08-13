@@ -10,6 +10,7 @@ const liveFields = [...$("livepanel").querySelectorAll("input,select")];
 // Course du curseur alpha : exposant = MAX * s². Quadratique pour placer la
 // diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).
 let ALPHA_MAX = 4, ALPHA_DEFAULT = 2;
+let SMOOTHING_FRAMES = 10;
 let BANKS = {};
 
 const alphaExp = () => ALPHA_MAX * Math.pow(parseFloat($("alpha").value), 2);
@@ -295,7 +296,11 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
     post("/api/update", { [id]: parseFloat($(id).value) }));
 });
 $("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
+
 // À part des champs numériques : une case se lit sur .checked, pas sur .value.
+// Rien ne la réécrit depuis l'état serveur — une case qu'un poll repositionne
+// devient impossible à cocher. C'est la ligne d'état, plus bas, qui dit ce qui
+// est réellement appliqué.
 $("averaging").addEventListener("change", () =>
   post("/api/update", { averaging: $("averaging").checked }));
 
@@ -333,8 +338,12 @@ function apply(s) {
   else if (s.verdict) { v.textContent = s.verdict; v.className = s.verdict; }
   else { v.textContent = "en cours"; v.className = "idle"; }
 
+  // Le lissage est rappelé sous le score : sur une scène stable son effet est
+  // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
+  const active = (s.live || {}).averaging;
   $("meta").textContent = s.running
-    ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ${s.frames} frames`
+    ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
+      `${s.frames} frames · lissage ${active ? "moyenne " + SMOOTHING_FRAMES : "aucun"}`
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
@@ -374,8 +383,11 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 
 (async function init() {
   const cfg = await (await fetch("/api/config")).json();
-  ALPHA_MAX = cfg.alpha_max;
-  ALPHA_DEFAULT = cfg.alpha_default;
+  // `??` et non `=` : une clé absente — page chargée contre une version
+  // antérieure du serveur — laisserait sinon un undefined s'afficher, ou un NaN
+  // se propager dans la course de l'alpha.
+  ALPHA_MAX = cfg.alpha_max ?? ALPHA_MAX;
+  ALPHA_DEFAULT = cfg.alpha_default ?? ALPHA_DEFAULT;
   $("faiss_threads").value = cfg.faiss_threads;
   $("faiss_gpu").checked = cfg.faiss_gpu;
 
@@ -385,7 +397,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
     <label class="check"><input type="checkbox" value="${l}"
       ${cfg.default_layers.includes(l) ? "checked" : ""}><span>${l}</span></label>`).join("");
   $("coreset_pct").value = cfg.default_coreset_pct;
-  $("smoothwin").textContent = cfg.smooth_window;
+  SMOOTHING_FRAMES = cfg.smoothing_frames ?? SMOOTHING_FRAMES;
+  $("smoothwin").textContent = SMOOTHING_FRAMES;
 
   fillBanks(cfg.banks);
 

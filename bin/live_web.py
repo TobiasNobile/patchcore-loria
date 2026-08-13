@@ -39,7 +39,6 @@ from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
-    SMOOTH_WINDOW,
     build_transform,
     preprocess,
     resolve_device,
@@ -79,6 +78,21 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 # la page avec son plafond : elle en déduit la course de son curseur 0→1.
 HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
+
+# Profondeur du lissage optionnel, en frames SCORÉES. Sans lui, rien n'est
+# agrégé : le score et la heatmap sont ceux de la dernière inférence.
+SMOOTHING_FRAMES = 10
+
+
+def aggregate(values, averaging):
+    """Moyenne les dernières valeurs scorées, ou rend la dernière telle quelle.
+
+    Sert aux deux natures : une liste de scores (scalaires) ou une liste de
+    cartes 2D, `axis=0` réduisant le temps dans les deux cas.
+    """
+    if not len(values):
+        return None
+    return np.mean(values, axis=0) if averaging else values[-1]
 
 
 def clamp_alpha(value):
@@ -436,16 +450,17 @@ class Runner:
                     "Confidentialité et sécurité > Caméra.".format(source)
                 )
 
-            scores = deque(maxlen=SMOOTH_WINDOW)
+            scores = deque(maxlen=SMOOTHING_FRAMES)
             heatmap = np.zeros(
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
             )
-            # Les N dernières cartes SCORÉES, et leur moyenne tenue à jour. La
-            # moyenne est recalculée à l'inférence et non à l'affichage : entre
-            # deux inférences la pile ne bouge pas, la refaire à chaque frame
+            # Les N dernières cartes SCORÉES, et la carte agrégée tenue à jour.
+            # Elle est recalculée à l'inférence et non à l'affichage : entre deux
+            # inférences la pile ne bouge pas, la refaire à chaque frame encodée
             # coûterait sans rien changer.
-            heatmaps = deque(maxlen=SMOOTH_WINDOW)
-            averaged = heatmap
+            heatmaps = deque(maxlen=SMOOTHING_FRAMES)
+            smoothed = heatmap
+            smoothed_on = False
             threshold = params["threshold"]
             frame_index = 0
             fps = 0.0
@@ -476,25 +491,25 @@ class Runner:
                     batch_scores, batch_masks = patchcore_instance.predict(tensor)
                     infer_ms = 1000.0 * (time.perf_counter() - t0)
                     scores.append(float(batch_scores[0]))
-                    # Médiane sur la fenêtre : robuste aux frames aberrantes.
-                    score = float(np.median(scores))
+                    score = float(aggregate(list(scores), averaging))
                     verdict = (
                         None if threshold is None
                         else ("anomalie" if score >= threshold else "ok")
                     )
                     heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
-                    averaged = np.mean(heatmaps, axis=0)
+                    smoothed = aggregate(list(heatmaps), averaging)
+                    smoothed_on = averaging
                     self._update(score=score, infer_ms=infer_ms, verdict=verdict)
 
                 # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
-                # et garde la dernière heatmap entre deux inférences. Le lissage
-                # ne touche que l'affichage — le score reste celui de la frame
-                # scorée, avec sa propre médiane glissante.
+                # et garde la dernière carte entre deux inférences. `smoothed`
+                # date de la dernière inférence : si le mode a changé depuis, on
+                # retombe sur la carte brute plutôt que d'afficher une agrégation
+                # périmée le temps de la frame scorée suivante.
+                shown = smoothed if averaging == smoothed_on else heatmap
                 ok_enc, buf = cv2.imencode(
-                    ".jpg",
-                    overlay_heatmap(preview, averaged if averaging else heatmap,
-                                    vmin, vmax, alpha),
+                    ".jpg", overlay_heatmap(preview, shown, vmin, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -587,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
                 "layers": list(FIT_LAYERS),
                 "default_layers": list(FIT_DEFAULT_LAYERS),
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
-                "smooth_window": SMOOTH_WINDOW,
+                "smoothing_frames": SMOOTHING_FRAMES,
                 "banks": find_banks(),
             })
         elif self.path == "/api/banks":

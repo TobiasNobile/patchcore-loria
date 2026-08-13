@@ -86,7 +86,7 @@
       <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
       <input id="source" name="source" value="0">
 
-      <label for="loop" class="check">
+      <label class="check">
         <input id="loop" name="loop" type="checkbox">
         <span>Boucler<small>rejouer un fichier sans fin</small></span>
       </label>
@@ -111,7 +111,7 @@
         <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche</small></label>
         <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="1">
 
-        <label for="faiss_gpu" class="check">
+        <label class="check">
           <input id="faiss_gpu" name="faiss_gpu" type="checkbox">
           <span>FAISS sur GPU<small>⚠ exige une carte NVIDIA et faiss-gpu</small></span>
         </label>
@@ -141,10 +141,11 @@
       <input id="vmax" class="live" type="number" min="1" step="1" value="10">
     </div>
 
-    <label for="averaging" class="check">
+    <label class="check">
       <input id="averaging" class="live" type="checkbox">
-      <span>Lissage<small>la heatmap affichée est la moyenne des
-        <b id="smoothwin">5</b> dernières frames scorées</small></span>
+      <span>Lissage<small>heatmap et score = moyenne des <b id="smoothwin">10</b>
+        dernières frames scorées ; décoché, valeurs brutes de la dernière
+        inférence</small></span>
     </label>
 
     <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
