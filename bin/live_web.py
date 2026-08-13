@@ -79,6 +79,18 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
 
+# Deux plafonds distincts, pour deux saturations distinctes une fois la distance
+# au-delà de vmax :
+#  - COLORMAP_HIGH borne l'indice dans la rampe jet, dont le sommet est un
+#    bordeaux sombre où deux distances très différentes rendent la même couleur ;
+#  - OPACITY_MAX borne le mélange, sinon la couleur remplace l'image à 100 % et
+#    l'objet le plus anormal est précisément celui qu'on ne voit plus.
+# COLORMAP_LOW relève le bas de la rampe hors du bleu nuit ; il ne se voit pas,
+# l'opacité y étant quasi nulle.
+COLORMAP_LOW = 0.2
+COLORMAP_HIGH = 0.9
+OPACITY_MAX = 0.9
+
 # Profondeur du lissage optionnel, en frames SCORÉES. Sans lui, rien n'est
 # agrégé : le score et la heatmap sont ceux de la dernière inférence.
 SMOOTHING_FRAMES = 10
@@ -110,11 +122,14 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
-    colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    # Couleur et opacité sont bornées séparément : la première pour rester dans
+    # la partie lisible de la rampe, la seconde pour laisser l'objet transparaître.
+    ramp = COLORMAP_LOW + normalized * (COLORMAP_HIGH - COLORMAP_LOW)
+    colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     # (H, W, 1) diffusé sur les 3 canaux BGR. Avec normalized ∈ [0, 1] et
     # alpha ≥ 0 la puissance reste dans [0, 1] : pas de clip nécessaire.
-    a = (normalized.astype(np.float32) ** alpha)[:, :, None]
+    a = (normalized.astype(np.float32) ** alpha)[:, :, None] * OPACITY_MAX
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
