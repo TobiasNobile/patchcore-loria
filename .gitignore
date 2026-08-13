@@ -1,6 +1,7 @@
 .idea/
 __pycache__/
 .venv
+.DS_Store
 LabletAnomaly.egg-info/
 mlruns/
 mlruns.db
