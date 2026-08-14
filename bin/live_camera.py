@@ -26,7 +26,7 @@ import patchcore.banks
 import patchcore.utils
 from experiments.runtime import resolve_device, select_device, tune_faiss_small_batches
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__) # c'est pour avoir les logs dans le terminal
 
 # Petite banque : le temps faiss est linéaire en sa taille. --bank_dir pour arbitrer.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
@@ -84,7 +84,7 @@ def preprocess(frame_bgr, transform, zoom):
     return tensor.unsqueeze(0), np.asarray(preview)
 
 
-def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
+def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
     """Superpose la heatmap et l'ATH sur la vignette. Renvoie une image BGR."""
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
@@ -96,16 +96,15 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
     # La vignette fait 224 px de côté : illisible sans agrandissement.
     overlay = cv2.resize(overlay, (640, 640), interpolation=cv2.INTER_NEAREST)
 
-    if threshold is None:
-        verdict, color = "score {:.2f}".format(score), (255, 255, 255)
-    elif score >= threshold:
-        verdict, color = "ANOMALIE {:.2f}".format(score), (0, 0, 255)
-    else:
-        verdict, color = "ok {:.2f}".format(score), (0, 200, 0)
-
     cv2.rectangle(overlay, (0, 0), (640, 40), (0, 0, 0), -1)
     cv2.putText(
-        overlay, verdict, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2
+        overlay,
+        "score {:.2f}".format(score),
+        (10, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
     )
     cv2.putText(
         overlay,
@@ -130,10 +129,6 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
 @click.option("--zoom", default=1.0, show_default=True,
               help="Recadrage centré avant prétraitement (2.0 = moitié centrale). "
                    "Sert à approcher le cadrage serré d'une banque de visages.")
-@click.option("--threshold", type=float, default=None,
-              help="Seuil de décision sur le score image. Sans seuil, seul le "
-                   "score brut est affiché (cf. bin/celeba/infer/histogram.py "
-                   "pour en calibrer un).")
 @click.option("--flip/--no-flip", default=True, show_default=True,
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
 @click.option("--loop/--no-loop", default=False, show_default=True,
@@ -143,7 +138,7 @@ def render(preview_rgb, heatmap, score, fps, ms, threshold, paused, vmin, vmax):
                    "de la couche : ~10 (layer3), ~20 (layer2), ~260 (layer4).")
 @click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
               help="Borne basse de couleur du heatmap.")
-def main(bank_dir, source, stride, zoom, threshold, flip, loop, vmax, vmin):
+def main(bank_dir, source, stride, zoom, flip, loop, vmax, vmin):
     tune_faiss_small_batches()
     device = select_device()
 
@@ -207,7 +202,7 @@ def main(bank_dir, source, stride, zoom, threshold, flip, loop, vmax, vmin):
             last_tick = now
             frame_index += 1
 
-            overlay = render(preview, heatmap, score, fps, infer_ms, threshold, paused, vmin, vmax)
+            overlay = render(preview, heatmap, score, fps, infer_ms, paused, vmin, vmax)
             cv2.imshow("PatchCore live", overlay)
 
             key = cv2.waitKey(1) & 0xFF

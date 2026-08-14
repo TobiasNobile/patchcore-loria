@@ -33,7 +33,6 @@ async function post(path, body) {
 }
 
 function readParams() {
-  const t = $("threshold").value;
   return {
     bank_dir: $("bank_dir").value,
     source: $("source").value,
@@ -42,7 +41,6 @@ function readParams() {
     vmax: parseFloat($("vmax").value || "10"),
     alpha: alphaExp(),
     smoothing: smoothingMode(),
-    threshold: t === "" ? null : parseFloat(t),
     loop: $("loop").checked,
     device: $("device").value,
     faiss_threads: parseInt($("faiss_threads").value || "1", 10),
@@ -343,10 +341,7 @@ function apply(s) {
 
   $("score").textContent =
     s.score === null || s.score === undefined ? "—" : s.score.toFixed(2);
-  const v = $("verdict");
-  if (!s.running) { v.textContent = "arrêté"; v.className = "idle"; }
-  else if (s.verdict) { v.textContent = s.verdict; v.className = s.verdict; }
-  else { v.textContent = "en cours"; v.className = "idle"; }
+  $("status").textContent = s.running ? "en cours" : "arrêté";
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.

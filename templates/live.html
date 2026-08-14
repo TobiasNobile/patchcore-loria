@@ -69,7 +69,7 @@
       <div id="flash"></div>
     </div>
     <div id="score">—</div>
-    <div id="verdict" class="idle">arrêté</div>
+    <div id="status" class="idle">arrêté</div>
     <div id="meta"></div>
     <div id="notice" hidden></div>
     <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
@@ -140,11 +140,6 @@
           <input id="faiss_gpu" name="faiss_gpu" type="checkbox">
           <span>FAISS sur GPU<small>⚠ exige une carte NVIDIA et faiss-gpu</small></span>
         </label>
-
-        <label for="threshold">Seuil<small>au-delà, verdict anomalie</small></label>
-        <!-- step=any : un seuil se lit entre deux modes d'un histogramme de
-             scores, ce n'est pas un multiple de quoi que ce soit. -->
-        <input id="threshold" name="threshold" type="number" step="any" placeholder="aucun">
       </div>
     </form>
 

@@ -20,7 +20,7 @@ import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-if platform.system() == "Darwin":
+if platform.system() == "Darwin": # equivalent à "est-ce que ça tourne sur MacOS"
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import click
@@ -162,7 +162,6 @@ class Runner:
             "fps": 0.0,
             "infer_ms": 0.0,
             "frames": 0,
-            "verdict": None,
             "error": None,
             "params": None,
             "device": None,
@@ -254,7 +253,7 @@ class Runner:
             # running dès maintenant : la page fige ses champs sans attendre la banque.
             self._state.update(
                 running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
-                verdict=None, error=None, params=params, device_note=None,
+                error=None, params=params, device_note=None,
             )
             # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
             self._live = {
@@ -435,7 +434,6 @@ class Runner:
             heatmaps = deque(maxlen=SMOOTHING_FRAMES)
             smoothed = heatmap
             smoothed_mode = "none"
-            threshold = params["threshold"]
             frame_index = 0
             fps = 0.0
             infer_ms = 0.0
@@ -466,15 +464,11 @@ class Runner:
                     infer_ms = 1000.0 * (time.perf_counter() - t0)
                     scores.append(float(batch_scores[0]))
                     score = float(aggregate(list(scores), smoothing))
-                    verdict = (
-                        None if threshold is None
-                        else ("anomalie" if score >= threshold else "ok")
-                    )
                     heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
                     smoothed = aggregate(list(heatmaps), smoothing)
                     smoothed_mode = smoothing
-                    self._update(score=score, infer_ms=infer_ms, verdict=verdict)
+                    self._update(score=score, infer_ms=infer_ms)
 
                 # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
@@ -698,8 +692,6 @@ class Handler(BaseHTTPRequestHandler):
                     # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
                     "alpha": HEATMAP_ALPHA if params.get("alpha") is None
                              else clamp_alpha(params["alpha"]),
-                    "threshold": None if params.get("threshold") is None
-                                 else float(params["threshold"]),
                     "smoothing": (params.get("smoothing")
                                   if params.get("smoothing") in SMOOTHING_MODES
                                   else "none"),

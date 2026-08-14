@@ -112,9 +112,9 @@ button:disabled { opacity: .35; cursor: default; }
 
 #score { font-size: 72px; font-weight: 600; line-height: 1;
          font-variant-numeric: tabular-nums; }
-#verdict { font-size: 15px; letter-spacing: .1em; text-transform: uppercase;
-           min-height: 20px; }
-.ok { color: var(--ok); } .anomalie { color: var(--bad); } .idle { color: var(--faint); }
+#status { font-size: 15px; letter-spacing: .1em; text-transform: uppercase;
+          min-height: 20px; }
+.idle { color: var(--faint); }
 #meta { color: var(--muted); font-size: 12px; min-height: 16px;
         font-variant-numeric: tabular-nums; }
 #capture { color: var(--ok); font-size: 12px; min-height: 16px;
