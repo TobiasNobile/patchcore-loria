@@ -3,9 +3,11 @@
 const $ = (id) => document.getElementById(id);
 const liveForm = $("params");
 const fitForm = $("fit");
-// Pris sur le panneau entier, pas sur le <form> : les réglages d'affichage
-// vivent après lui, sans quoi Entrée dans un champ soumettrait le démarrage.
-const liveFields = [...$("livepanel").querySelectorAll("input,select")];
+// Pris sur les deux conteneurs, pas sur le <form> : les réglages d'affichage
+// vivent hors de lui — certains dans le panneau de droite, lissage et alpha sous
+// la caméra. Sans les deux, ceux du bas ne seraient pas figés pendant un fit.
+const liveFields = [...document.querySelectorAll(
+  "#livepanel input, #livepanel select, #stagecontrols input")];
 
 // Course du curseur alpha : exposant = MAX * s². Quadratique pour placer la
 // diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).

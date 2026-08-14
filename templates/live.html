@@ -74,6 +74,31 @@
     <div id="notice" hidden></div>
     <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
     <div id="capture"></div>
+
+    <!-- Sous la caméra plutôt que dans le panneau de droite : ce sont les deux
+         réglages qu'on ajuste en regardant l'image, ils doivent être visibles
+         sans défiler. Ils restent .live, donc actifs pendant le scoring. -->
+    <div id="stagecontrols">
+      <label>Lissage<small>heatmap et score agrégés sur les <b id="smoothwin">10</b>
+        dernières frames scorées. Rien de coché : valeurs brutes de la dernière
+        inférence.</small></label>
+      <label class="check">
+        <input id="smooth_mean" class="live" type="checkbox">
+        <span>Moyenne<small>stabilise, mais dilue un objet vu sur une seule
+          frame</small></span>
+      </label>
+      <label class="check">
+        <input id="smooth_max" class="live" type="checkbox">
+        <span>Maximum<small>retient le pic : un passage fugace reste allumé, la
+          tache met 10 inférences à s'éteindre</small></span>
+      </label>
+
+      <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
+      <div class="slider">
+        <input id="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
+        <output id="alphaval" for="alpha">—</output>
+      </div>
+    </div>
   </section>
 
   <!-- Droite : scorer en direct. Les champs .live s'ajustent sans interrompre. -->
@@ -141,25 +166,6 @@
       <input id="vmax" class="live" type="number" min="1" step="1" value="10">
     </div>
 
-    <label>Lissage<small>heatmap et score agrégés sur les <b id="smoothwin">10</b>
-      dernières frames scorées. Rien de coché : valeurs brutes de la dernière
-      inférence.</small></label>
-    <label class="check">
-      <input id="smooth_mean" class="live" type="checkbox">
-      <span>Moyenne<small>stabilise, mais dilue un objet vu sur une seule
-        frame</small></span>
-    </label>
-    <label class="check">
-      <input id="smooth_max" class="live" type="checkbox">
-      <span>Maximum<small>retient le pic : un passage fugace reste allumé, la
-        tache met 10 inférences à s'éteindre</small></span>
-    </label>
-
-    <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
-    <div class="slider">
-      <input id="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
-      <output id="alphaval" for="alpha">—</output>
-    </div>
   </section>
 </main>
 

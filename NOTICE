@@ -8,3 +8,5 @@ This repository is a derivative work. Files under src/patchcore/ are unmodified
 upstream code except where noted; files under bin/, src/experiments/ and tools/
 were added or modified in 2026 by Tobias Nobile (LORIA / Telecom Nancy).
 See the git history for the exact set of changes.
+
+Modified by Tobias NOBILE in 2026

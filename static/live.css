@@ -120,6 +120,12 @@ button:disabled { opacity: .35; cursor: default; }
 #capture { color: var(--ok); font-size: 12px; min-height: 16px;
            text-align: center; word-break: break-all; }
 
+/* Réglages sous la caméra. #stage centre ses enfants ; on rétablit un alignement
+   à gauche et on cale la largeur sur celle du cadre vidéo pour que l'ensemble
+   reste une colonne. */
+#stagecontrols { width: 100%; max-width: 420px; text-align: left; margin-top: 4px; }
+#stagecontrols > label:first-child { margin-bottom: 8px; }
+
 #notice {
   border: 1px solid #f0c000; background: #fffbeb; color: #7a5b00;
   border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: 420px;
