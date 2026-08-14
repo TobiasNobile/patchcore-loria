@@ -20,7 +20,7 @@ CONFIG_FILENAME = "fit_config.json"
 # torchvision expose plus de ResNet que _BACKBONES amont : enregistrés ici, dans le module qui charge les banques.
 for _name in ("resnet18", "resnet34"):
     patchcore.backbones._BACKBONES.setdefault(
-        _name, "models.{}(pretrained=True)".format(_name)
+        _name, "models.{}(pretrained=True)".format(_name) # en gros on rajoute ces deux backbones, pas présent de base dans PatchCore backbones
     )
 
 
