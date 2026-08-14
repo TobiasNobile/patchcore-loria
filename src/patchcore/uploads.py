@@ -1,17 +1,8 @@
-"""Dépaquetage d'une archive d'images d'entraînement envoyée par l'interface.
+"""Dépaquetage d'une archive d'images envoyée par l'interface.
 
-L'archive vient d'un navigateur : on ne sait rien de son contenu, et le zip est
-un format qui permet d'écrire hors du dossier d'extraction (chemins absolus ou
-remontants — « zip slip »). Chaque membre est donc revalidé ici plutôt que
-confié à `ZipFile.extractall`.
-
-Sortie : l'arborescence attendue par experiments.folder.FolderDataset,
-
-    <dest>/normal/   images du fonctionnement nominal
-    <dest>/anomaly/  contre-exemples, seulement si l'archive en fournit
-
-Une archive plate (que des images à la racine) est traitée comme du normal :
-c'est le cas courant, « voici mes images d'entraînement ».
+Sortie : l'arborescence attendue par experiments.folder.FolderDataset, soit
+`<dest>/normal/` et `<dest>/anomaly/` si l'archive en fournit. Une archive plate
+est traitée comme du normal.
 """
 
 import logging
@@ -22,9 +13,6 @@ LOGGER = logging.getLogger(__name__)
 
 EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 NORMAL, ANOMALY = "normal", "anomaly"
-
-# Au-delà, l'archive est probablement autre chose qu'un jeu d'images ; refuser
-# tôt vaut mieux que remplir le disque puis échouer.
 MAX_FILES = 200_000
 
 
@@ -33,13 +21,8 @@ class UploadError(Exception):
 
 
 def _classify(member_name):
-    """(sous-dossier, nom de fichier) ou None si le membre est à ignorer.
-
-    Le classement suit le premier segment du chemin dans l'archive : un zip
-    fait de normal/ + anomaly/ garde sa séparation, tout le reste est du normal.
-    """
-    # Les zips produits sous Windows utilisent parfois des antislashs, et macOS
-    # ajoute un dossier __MACOSX/ de métadonnées qui n'est pas des images.
+    """(sous-dossier, nom de fichier), ou None si le membre est à ignorer."""
+    # Antislashs des zips Windows, et dossier de métadonnées __MACOSX.
     parts = [p for p in member_name.replace("\\", "/").split("/") if p]
     if not parts or parts[0] == "__MACOSX":
         return None
@@ -51,16 +34,11 @@ def _classify(member_name):
 
 
 def _safe_target(dest_dir, folder, base, seen):
-    """Chemin de sortie garanti sous dest_dir, et unique.
-
-    `base` est réduit à son nom de fichier par _classify, ce qui neutralise
-    déjà « .. » et les chemins absolus ; on le revérifie plutôt que de faire
-    reposer la sécurité sur une fonction distante. Deux sous-dossiers de
-    l'archive peuvent porter le même nom de fichier, d'où le compteur.
+    """Chemin de sortie garanti sous dest_dir, et unique. `base` est déjà réduit à
+    un nom de fichier ; on le revérifie plutôt que d'en dépendre.
     """
-    name = base
     stem, ext = os.path.splitext(base)
-    i = 1
+    name, i = base, 1
     while (folder, name) in seen:
         name = "{}_{}{}".format(stem, i, ext)
         i += 1
@@ -85,11 +63,8 @@ def extract_images(zip_path, dest_dir):
     with archive:
         members = [m for m in archive.infolist() if not m.is_dir()]
         if len(members) > MAX_FILES:
-            raise UploadError(
-                "Archive à {} entrées, au-delà de la limite de {}.".format(
-                    len(members), MAX_FILES
-                )
-            )
+            raise UploadError("Archive à {} entrées, au-delà de {}.".format(
+                len(members), MAX_FILES))
         for member in members:
             classified = _classify(member.filename)
             if classified is None:
@@ -97,9 +72,9 @@ def extract_images(zip_path, dest_dir):
             folder, base = classified
             target = _safe_target(dest_dir, folder, base, seen)
             os.makedirs(os.path.dirname(target), exist_ok=True)
+            # Par blocs : un membre décompressé peut être bien plus gros que son
+            # entrée dans l'archive.
             with archive.open(member) as src, open(target, "wb") as out:
-                # Copie par blocs : un membre décompressé peut être bien plus
-                # gros que son entrée dans l'archive.
                 while True:
                     chunk = src.read(1024 * 1024)
                     if not chunk:
@@ -108,12 +83,8 @@ def extract_images(zip_path, dest_dir):
             counts[folder] += 1
 
     if not counts[NORMAL]:
-        raise UploadError(
-            "Aucune image exploitable dans l'archive (extensions acceptées : "
-            "{}).".format(", ".join(EXTENSIONS))
-        )
-    LOGGER.info(
-        "Extracted %d normal / %d anomaly images to %s",
-        counts[NORMAL], counts[ANOMALY], dest_dir,
-    )
+        raise UploadError("Aucune image exploitable (extensions : {}).".format(
+            ", ".join(EXTENSIONS)))
+    LOGGER.info("Extracted %d normal / %d anomaly to %s",
+                counts[NORMAL], counts[ANOMALY], dest_dir)
     return counts

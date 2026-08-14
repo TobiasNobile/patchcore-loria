@@ -1,10 +1,8 @@
-"""Sauvegarde et chargement des banques mémoire PatchCore, avec la config du fit.
+"""Sauvegarde et chargement des banques mémoire, avec la config du fit.
 
-Une banque sur disque = un dossier contenant ce qu'écrit PatchCore.save_to_path
-plus un fit_config.json décrivant sa construction. Ce sidecar permet de réutiliser
-la banque sans risque : le prétraitement (resize/imagesize) et le seed sont relus
-de là plutôt que redonnés à l'appel — une requête encodée autrement que la banque
-donnerait des distances qui ne veulent rien dire, silencieusement.
+Le fit_config.json à côté de la banque porte le prétraitement et le seed : une
+requête encodée autrement que la banque donnerait des distances silencieusement
+fausses.
 """
 
 import json
@@ -19,11 +17,7 @@ LOGGER = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "fit_config.json"
 
-# torchvision expose plus de ResNet que _BACKBONES amont n'en déclare. Enregistrés
-# ici, dans le module qui charge les banques : load_from_path reconstruit le
-# backbone par son nom, donc tout chemin capable d'ouvrir une banque doit
-# connaître ces noms — sans quoi une banque resnet34 lève un KeyError à
-# l'ouverture. Placé hors de backbones.py, laissé conforme à l'amont.
+# torchvision expose plus de ResNet que _BACKBONES amont : enregistrés ici, dans le module qui charge les banques.
 for _name in ("resnet18", "resnet34"):
     patchcore.backbones._BACKBONES.setdefault(
         _name, "models.{}(pretrained=True)".format(_name)

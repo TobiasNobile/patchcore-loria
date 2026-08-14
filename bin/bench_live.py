@@ -1,25 +1,8 @@
-"""Décompose le coût d'une frame live, étape par étape, pour une ou plusieurs banques.
+"""Coût d'une frame, étape par étape : preprocess, embed, faiss, post, encode.
 
-Les étapes sont celles de la boucle de bin/live_web.py :
+    python bin/bench_live.py --bank_dir models/coco/<tag>
 
-    preprocess  redimensionnement + normalisation de la frame
-    embed       passe backbone + agrégation des patchs
-    faiss       recherche des k plus proches voisins
-    post        unpatch + score + flou de segmentation
-    encode      overlay heatmap + JPEG (hors scoring, mais dans la boucle)
-
-Une banque par sous-processus : enchaîner deux load_bank dans le même process
-segfault sur macOS (torch + faiss + libomp).
-
-    python bin/bench_live.py models/coco/wideresnet50_l3-l4_*_ts20000_s0
-
-Env :
-    INFER_FAISS_THREADS=8   threads FAISS (défaut 1 sur macOS, 4 ailleurs)
-    BENCH_TORCH_THREADS=10  threads torch pour le backbone (défaut : inchangé)
-    PATCHCORE_DEVICE=cpu    auto | cpu | cuda[:N] | mps (défaut auto)
-    INFER_FAISS_GPU=1       recherche FAISS sur GPU (nécessite faiss-gpu-cu12)
-    BENCH_IMAGESIZE=160     taille d'entrée au lieu de celle du fit : les scores
-                            perdent leur sens, les temps restent valides.
+Écrit un JSON par banque dans results/benchmarks/.
 """
 
 import json

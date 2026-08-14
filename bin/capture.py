@@ -1,13 +1,9 @@
 """Constitue le jeu d'images de la scène de déploiement depuis la caméra.
 
-À lancer sur la machine embarquée, une fois pour le normal, une fois pour les
-contre-exemples :
-
     python bin/capture.py --out data/scene/normal  --count 400 --every 0.5
     python bin/capture.py --out data/scene/anomaly --count 60
 
-Fitter ensuite avec bin/scene/fit/memory_bank.py. Filmer le nominal sous toutes
-ses variations (lumière, angles, positions) : tout ce qui n'est pas dans la
+Filmer le nominal sous toutes ses variations : tout ce qui n'est pas dans la
 banque sera scoré comme anormal.
 """
 

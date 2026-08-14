@@ -1,24 +1,8 @@
-"""Score le flux d'une webcam avec une banque mémoire PatchCore, en direct.
+"""Scoring d'une webcam avec une banque PatchCore, dans une fenêtre OpenCV.
 
-Même moitié rapide de PatchCore que bin/celeba/infer/heatmap.py — chargement
-d'une banque déjà fittée, aucun fit ici — mais la source est une caméra plutôt
-qu'un split de test. Le prétraitement (resize/imagesize) est relu du
-fit_config.json de la banque : une requête encodée autrement que la banque
-donnerait des distances qui ne veulent rien dire.
+    python bin/live_camera.py --bank_dir models/celeba/<tag>
 
-    python bin/live_camera.py                          # webcam 0, banque par défaut
-    python bin/live_camera.py --bank_dir models/coco/…  # une autre banque
-    python bin/live_camera.py --source rtsp://…        # caméra IP
-    python bin/live_camera.py --source clip.mp4 --loop # rejouer un fichier
-
-Touches : q/échap quitte, s écrit un instantané dans results/<dataset>/live/
-(le dataset est déduit de --bank_dir), espace met en pause l'inférence
-(l'aperçu continue).
-
-Attention au domaine de la banque : une banque CelebA est faite de visages
-recadrés serré. Une webcam plein cadre est hors distribution et scorera haut
-partout — cadrer un visage, ou utiliser --zoom, pour que les scores veuillent
-dire quelque chose.
+Espace met en pause, q quitte, s enregistre la frame courante.
 """
 
 import logging
@@ -27,8 +11,7 @@ import platform
 import time
 from collections import deque
 
-# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
-# fait abort. À poser avant l'import de patchcore, qui charge faiss.
+# macOS : deux libomp, la seconde initialisée fait abort. Avant l'import de torch.
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -45,27 +28,22 @@ from experiments.runtime import resolve_device, select_device, tune_faiss_small_
 
 LOGGER = logging.getLogger(__name__)
 
-# Petite banque : le temps de recherche faiss est linéaire en sa taille et pèse
-# lourd dans la cadence. --bank_dir pour arbitrer autrement.
+# Petite banque : le temps faiss est linéaire en sa taille. --bank_dir pour arbitrer.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
 
-# Échelle fixe, en score de patch. Un autoscale par image ferait clignoter la
-# heatmap et interdirait de comparer deux frames.
+# Échelle fixe : un autoscale par image ferait clignoter la heatmap.
 HEATMAP_VMIN = 0.0
 HEATMAP_VMAX = 10.0
 HEATMAP_ALPHA = 0.5
 
-# Fenêtre de la médiane glissante, en frames scorées. Médiane et non moyenne :
-# absorbe les frames aberrantes (bougé, autofocus) sans traîner.
+# Fenêtre de la médiane glissante. Médiane : absorbe les frames aberrantes.
 SMOOTH_WINDOW = 5
 
-# Racine des instantanés ; le sous-dossier dataset est déduit de --bank_dir.
-# models/celeba/<tag> -> results/celeba/live/
+# Racine des instantanés ; le sous-dossier vient de --bank_dir.
 SNAPSHOT_ROOT = "results"
 
 FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
-# Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault (cf.
-# patchcore/__init__.py). Coût négligeable : le temps est dans le backbone.
+# Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault.
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
 
 

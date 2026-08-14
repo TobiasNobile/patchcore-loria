@@ -1,11 +1,7 @@
-"""Interface web locale : construire une banque PatchCore, puis scorer la webcam.
+"""Interface web : construire une banque PatchCore, puis scorer la webcam.
 
-Deux moitiés, une par phase. À gauche on constitue une banque — un zip d'images
-du nominal, un backbone, des couches, un taux de coreset — et le fit écrit un
-`.pkg` dans coresets/. À droite on choisit une banque et on score la caméra en
-direct. Serveur stdlib, à n'exposer que sur la loopback (pas d'authentification).
-
-    python main.py                    # puis ouvrir http://127.0.0.1:8000
+À gauche on constitue une banque depuis un zip d'images du nominal, à droite on
+la charge et on score la caméra. Serveur stdlib, loopback, sans authentification.
 
 Le fit et la boucle de scoring s'excluent : tous deux tournent sur le thread
 principal, seul endroit où torch est sûr sur macOS.
@@ -33,8 +29,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# live_camera d'abord : il importe torch avant faiss. L'ordre inverse fait
-# abort libomp (« OMP: Error #179 ») — ne pas réordonner.
+# live_camera d'abord : torch avant faiss, sinon abort libomp.
 from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
     HEATMAP_VMAX,
@@ -61,54 +56,36 @@ CORESETS_DIR = patchcore.packaging.CORESETS_DIR
 TEMPLATES_DIR = "templates"
 STATIC_DIR = "static"
 
-# Les backbones proposés au fit, du plus lourd au plus rapide. Restreint à trois
-# ResNet : PatchCore veut des cartes de features convolutives par couche, et ces
-# trois-là couvrent le compromis cadence/AUROC mesuré dans le README.
+# Backbones proposés au fit, du plus lourd au plus rapide.
 FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
 FIT_LAYERS = ("layer1", "layer2", "layer3", "layer4")
 FIT_DEFAULT_LAYERS = ("layer2", "layer3")
 FIT_DEFAULT_CORESET_PCT = 0.01
 
-# Plafond du corps d'un upload. Un zip d'images de scène pèse quelques centaines
-# de Mo ; au-delà c'est une erreur de manipulation, et le refuser tôt évite de
-# remplir le disque avant de s'en apercevoir.
+# Plafond d'un upload : au-delà c'est une erreur de manipulation.
 MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 
-# Exposant du canal alpha (pas le poids de mélange de live_camera), injecté dans
-# la page avec son plafond : elle en déduit la course de son curseur 0→1.
+# Exposant du canal alpha et son plafond ; la page en déduit la course du curseur.
 HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
 
-# Bornes de la rampe jet, appliquées en écrêtage — clip(normalized, LOW, HIGH) —
-# et non en rééchelonnement : le milieu de la rampe garde sa correspondance avec
-# le score, seuls les deux bouts inexploitables sont coupés. Au-delà de HIGH le
-# jet vire au bordeaux sombre, où deux distances très différentes rendent la même
-# couleur ; sous LOW il plonge dans le bleu nuit, invisible de toute façon
-# puisque l'opacité y est quasi nulle.
+# Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
 COLORMAP_LOW = 0.1
 COLORMAP_HIGH = 0.9
 
-# Plafond du mélange, distinct des précédents : à 1 la couleur remplace l'image
-# et l'objet le plus anormal est justement celui qu'on ne voit plus.
+# Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
-# Profondeur des agrégations optionnelles, en frames SCORÉES. Sans elles, rien
-# n'est agrégé : le score et la heatmap sont ceux de la dernière inférence.
+# Profondeur des agrégations optionnelles, en frames scorées.
 SMOOTHING_FRAMES = 10
 SMOOTHING_MODES = ("none", "mean", "max")
 
 
 def aggregate(values, mode):
-    """Agrège les dernières valeurs scorées. Rend la dernière telle quelle en
-    mode `none`.
-
-    Sert aux deux natures : une liste de scores (scalaires) ou une liste de
-    cartes 2D, `axis=0` réduisant le temps dans les deux cas.
-
-    `mean` stabilise mais dilue : un objet vu sur une seule frame voit son
-    intensité divisée par la profondeur de la fenêtre. `max` fait l'inverse — il
-    retient le pic, donc un passage fugace reste allumé, au prix d'une tache qui
-    ne s'éteint qu'au bout de SMOOTHING_FRAMES inférences.
+    """Agrège les dernières valeurs scorées ; `none` rend la dernière telle quelle.
+    
+    `mean` stabilise mais dilue un pic bref ; `max` le retient, au prix d'une
+    tache qui met SMOOTHING_FRAMES inférences à s'éteindre.
     """
     if not len(values):
         return None
@@ -125,31 +102,24 @@ def clamp_alpha(value):
 
 
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
-    """Vignette + heatmap jet, en BGR. vmin/vmax et alpha sont réglables en direct
-    depuis la page (pur affichage, aucun effet sur les scores).
-
-    Le canal alpha vaut normalized ** alpha, par pixel : `alpha` est un exposant,
-    pas un poids de mélange. Il tord la rampe en marche — 1 sur l'anomalie, 0 sur
-    le normal, qui reste l'image nue."""
+    """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
+    
+    `alpha` est un exposant appliqué par pixel, pas un poids de mélange.
+    """
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
-    # Couleur et opacité sont bornées séparément : la première pour rester dans
-    # la partie lisible de la rampe, la seconde pour laisser l'objet transparaître.
+    # Couleur et opacité bornées séparément : l'alpha suit la valeur brute.
     ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
     colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    # (H, W, 1) diffusé sur les 3 canaux BGR. Avec normalized ∈ [0, 1] et
-    # alpha ≥ 0 la puissance reste dans [0, 1] : pas de clip nécessaire.
+    # (H, W, 1) diffusé sur les 3 canaux BGR.
     a = (normalized.astype(np.float32) ** alpha)[:, :, None] * OPACITY_MAX
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
 def find_banks():
-    """Les .pkg de coresets/, avec de quoi renseigner le bandeau sans les charger.
-
-    Seul le fit_config.json est lu dans l'archive : l'index faiss pèse jusqu'au
-    gigaoctet et n'a rien à faire ici."""
+    """Les .pkg de coresets/. Seul le fit_config est lu : l'index pèse jusqu'au Go."""
     banks = []
     for entry in patchcore.packaging.find(CORESETS_DIR):
         cfg = entry["config"]
@@ -173,14 +143,10 @@ def find_banks():
 
 
 class Runner:
-    """Les deux travaux longs — construire une banque, scorer la caméra —
-    pilotés par la page.
-
-    Ils tournent sur le thread principal et le serveur HTTP en fond, jamais
-    l'inverse : sur macOS torch abort si on le touche depuis un thread
-    secondaire. C'est aussi ce qui les rend exclusifs l'un de l'autre, ce qui
-    tombe bien — un fit sature déjà la machine. Les handlers HTTP ne font que
-    déposer une demande ici, et relisent l'état par polling (un dict sous verrou).
+    """Les deux travaux longs — fit et scoring — sur le thread principal.
+    
+    Sur macOS torch abort depuis un thread secondaire, d'où le thread principal
+    et le serveur HTTP en fond. C'est aussi ce qui les rend exclusifs.
     """
 
     def __init__(self):
@@ -202,8 +168,7 @@ class Runner:
             "device": None,
             "device_note": None,
         }
-        # Avancement du fit. `total` nul = phase de durée inconnue (la sélection
-        # du coreset n'expose aucun compteur).
+        # Avancement du fit. `total` nul = phase sans compteur (le coreset).
         self._fit = {
             "running": False, "phase": None, "done": 0, "total": 0,
             "name": None, "error": None, "seconds": 0.0, "images": None,
@@ -236,11 +201,10 @@ class Runner:
                 self._live["smoothing"] = fields["smoothing"]
 
     def snapshot(self):
-        """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
-        results/<tache>/captures/<layer>/<coreset>/v<vmax>/cap_<ts>_s<curseur>_a<exposant>.jpg.
-
-        Ce qui définit une série est un dossier, ce qui varie d'une capture à
-        l'autre est dans le nom."""
+        """Enregistre l'overlay affiché sous results/<tache>/captures/…
+        
+        Un dossier définit une série, le nom porte ce qui varie d'une capture à l'autre.
+        """
         with self._lock:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
@@ -250,16 +214,14 @@ class Runner:
             return None
         bank = params["bank_dir"] if params else ""
         task = meta.get("task") or os.path.basename(bank).split("_")[0] or "live"
-        # Rangé par tâche / couche / coreset (lus du fit_config de la banque),
-        # puis par vmax.
+        # Rangé par tâche / couche / coreset, puis par vmax.
         out_dir = os.path.join(
             "results", task, "captures",
             meta.get("layer", "l?"), meta.get("coreset", "p?"),
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # La page n'envoie que l'exposant : on inverse son mappage plutôt que de
-        # faire circuler deux valeurs qui pourraient se désynchroniser.
+        # La page n'envoie que l'exposant : on inverse son mappage.
         slider = (alpha / HEATMAP_ALPHA_MAX) ** 0.5 if HEATMAP_ALPHA_MAX else 0.0
         path = os.path.join(
             out_dir,
@@ -289,8 +251,7 @@ class Runner:
             self._stop.clear()
             self._pending = ("live", params)
             self._jpeg = None
-            # running dès maintenant, pour que la page fige les champs sans
-            # attendre que le thread principal ait chargé la banque.
+            # running dès maintenant : la page fige ses champs sans attendre la banque.
             self._state.update(
                 running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
                 verdict=None, error=None, params=params, device_note=None,
@@ -351,10 +312,8 @@ class Runner:
 
     def _fit_bank(self, params):
         """Zip d'images -> banque -> coresets/<nom>.pkg.
-
-        Les images extraites restent à côté du .pkg : elles disent de quoi la
-        banque a été faite, et permettent de la refitter autrement sans avoir à
-        les renvoyer.
+        
+        Les images extraites restent à côté du .pkg : de quoi refitter sans les renvoyer.
         """
         t0 = time.perf_counter()
         staging = os.path.join(CORESETS_DIR, ".incoming-{}".format(int(t0 * 1000)))
@@ -363,9 +322,7 @@ class Runner:
             self._update_fit(phase="extraction")
             counts = patchcore.uploads.extract_images(params["archive"], staging)
             available = counts[patchcore.uploads.NORMAL]
-            # Le nom de la banque doit dire ce qui est réellement entré dedans :
-            # demander 20 000 images d'une archive qui en compte 400 donne une
-            # banque à 400, pas un fichier nommé ts20000.
+            # Le nom dit ce qui est vraiment entré : 20 000 demandés sur 400 images donnent ts400.
             subset = params["train_subset"]
             subset = None if not subset else min(subset, available)
             self._update_fit(images=available)
@@ -378,16 +335,13 @@ class Runner:
                     seconds=time.perf_counter() - t0,
                 )
 
-            # SCENE lit son dossier d'images dans SCENE_PATH ; `source` le
-            # réinscrit dans le fit_config pour l'inférence.
+            # SCENE lit SCENE_PATH ; `source` le réinscrit pour l'inférence.
             os.environ["SCENE_PATH"] = staging
             bank_dir = run_fit(
                 SCENE, models_dir=staging, coreset_pct=FIT_DEFAULT_CORESET_PCT,
                 extra_config={"source": staging, "task": params["task"]},
                 progress=progress, random_subset=True,
-                # Pas de workers : ils démarrent par spawn sur macOS, chacun
-                # réimportant le module principal du serveur. Le décodage JPEG
-                # pèse ~10 % face au backbone, le jeu n'en vaut pas la chandelle.
+                # Pas de workers : leur spawn réimporte le module du serveur sur macOS.
                 num_workers=0,
                 overrides={
                     "backbone_name": params["backbone"],
@@ -403,9 +357,7 @@ class Runner:
             name = patchcore.packaging.build_name(config, params["task"])
             pkg_path = patchcore.packaging.pack(bank_dir, os.path.join(CORESETS_DIR, name))
 
-            # Les images ne sont déplacées qu'une fois le .pkg écrit : un fit
-            # raté ne laisse pas un dossier d'images orphelin qui ressemblerait
-            # à une banque.
+            # Images déplacées après le .pkg : un fit raté ne laisse pas de dossier orphelin.
             images_dir = os.path.join(CORESETS_DIR, name[: -len(patchcore.packaging.SUFFIX)])
             shutil.rmtree(images_dir, ignore_errors=True)
             shutil.rmtree(os.path.join(staging, os.path.basename(bank_dir)),
@@ -413,8 +365,7 @@ class Runner:
             os.replace(staging, images_dir)
             staging = None
 
-            # `trained` < `images` : FolderDataset réserve 20 % du normal pour
-            # un éventuel calibrage de seuil. Affiché, sinon l'écart surprend.
+            # trained < images : FolderDataset garde 20 % hors banque.
             self._update_fit(
                 running=False, phase="terminé", name=name,
                 trained=config.get("n_train_images"),
@@ -452,7 +403,6 @@ class Runner:
                     l.replace("layer", "l")
                     for l in fit_config.get("layers_to_extract_from", ["layer2", "layer3"])
                 )
-                # Sinon deux configurations se mélangeraient dans le même dossier.
                 # Suffixe seulement si non standard, comme build_tag() du fit.
                 backbone = fit_config.get("backbone_name", "wideresnet50")
                 if backbone != "wideresnet50":
@@ -481,10 +431,7 @@ class Runner:
             heatmap = np.zeros(
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
             )
-            # Les N dernières cartes SCORÉES, et la carte agrégée tenue à jour.
-            # Elle est recalculée à l'inférence et non à l'affichage : entre deux
-            # inférences la pile ne bouge pas, la refaire à chaque frame encodée
-            # coûterait sans rien changer.
+            # Cartes scorées récentes et leur agrégat, recalculé à l'inférence seulement.
             heatmaps = deque(maxlen=SMOOTHING_FRAMES)
             smoothed = heatmap
             smoothed_mode = "none"
@@ -529,11 +476,7 @@ class Runner:
                     smoothed_mode = smoothing
                     self._update(score=score, infer_ms=infer_ms, verdict=verdict)
 
-                # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
-                # et garde la dernière carte entre deux inférences. `smoothed`
-                # date de la dernière inférence : si le mode a changé depuis, on
-                # retombe sur la carte brute plutôt que d'afficher une agrégation
-                # périmée le temps de la frame scorée suivante.
+                # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
                 ok_enc, buf = cv2.imencode(
                     ".jpg", overlay_heatmap(preview, shown, vmin, vmax, alpha),
@@ -643,10 +586,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "not found", "text/plain")
 
     def _stream(self):
-        """MJPEG : la vignette telle que le réseau la voit, tant que ça tourne.
-
-        Se termine avec la boucle, la page rebranche le <img> au démarrage
-        suivant. Pas de Content-Length : la réponse ne finit qu'à la coupure.
+        """MJPEG tant que la boucle tourne. Pas de Content-Length : la réponse ne finit
+        qu'à la coupure, et la page rebranche le <img> au démarrage suivant.
         """
         self.send_response(200)
         self.send_header("Cache-Control", "no-store")
@@ -672,12 +613,10 @@ class Handler(BaseHTTPRequestHandler):
             pass  # onglet fermé ou rechargé
 
     def _receive_fit(self):
-        """Reçoit l'archive d'images et lance le fit.
-
-        Le zip arrive en corps brut, les réglages en query string, plutôt qu'en
-        multipart : un corps brut se recopie sur disque par blocs sans jamais
-        tenir en mémoire, là où un multipart de plusieurs gigaoctets devrait
-        être découpé à la main.
+        """Reçoit l'archive et lance le fit.
+        
+        Corps brut plutôt que multipart : il se recopie sur disque par blocs sans
+        jamais tenir en mémoire.
         """
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
@@ -741,8 +680,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": ok, "error": err}, 200 if ok else 409)
 
     def do_POST(self):
-        # Traité avant toute lecture du corps : l'archive peut peser des
-        # gigaoctets et ne doit pas passer par la mémoire.
+        # Avant toute lecture du corps : l'archive peut peser des gigaoctets.
         if self.path.split("?")[0] == "/api/fit":
             self._receive_fit()
             return
@@ -776,8 +714,7 @@ class Handler(BaseHTTPRequestHandler):
             if not params["bank_dir"]:
                 self._json({"error": "Aucune banque sélectionnée."}, 400)
                 return
-            # La page n'est pas authentifiée : on n'ouvre que ce que coresets/
-            # contient réellement, pas un chemin quelconque venu de la requête.
+            # Page non authentifiée : n'ouvrir que ce que coresets/ contient.
             if params["bank_dir"] not in {b["dir"] for b in find_banks()}:
                 self._json({"error": "Banque inconnue dans {}/.".format(CORESETS_DIR)}, 400)
                 return

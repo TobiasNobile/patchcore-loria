@@ -40,10 +40,9 @@ BINS = 50
 
 @dataclass
 class Spec:
-    """Ce qui distingue un dataset d'un autre dans ces pipelines.
-
-    `build` reçoit le fit_config quand il existe (l'inférence y relit le chemin
-    des images) ; il vaut None au fit."""
+    """Ce qui distingue un dataset d'un autre. `build` reçoit le fit_config à
+    l'inférence, None au fit.
+    """
 
     name: str
     build: Callable
@@ -72,8 +71,7 @@ def _load_bank(bank_dir, prefix):
 
 
 def _balanced_subset(dataset, n_per_class, seed, spec):
-    """Index tirés par classe AVANT de scorer : les labels sont connus sans
-    inférence, inutile de scorer ce qu'on ne tracera pas."""
+    """Index tirés par classe avant de scorer : les labels sont connus sans inférence."""
     labels = np.asarray(dataset.labels, dtype=int)
     normal_idx = np.where(labels == 0)[0]
     anomaly_idx = np.where(labels == 1)[0]
@@ -116,11 +114,10 @@ def _sampler(name, pct, device, proj_dim):
 
 
 def fit_settings(models_dir, coreset_pct, train_subset, overrides=None):
-    """Les réglages du fit, tous surchargeables par l'environnement.
-
-    `overrides` l'emporte sur l'environnement : il porte des valeurs saisies
-    explicitement (l'interface web), là où les variables d'environnement sont
-    le réglage ambiant des scripts. Les clés valant None sont ignorées.
+    """Les réglages du fit, surchargeables par l'environnement.
+    
+    `overrides` l'emporte sur l'environnement : valeurs saisies explicitement
+    (l'interface) contre réglage ambiant des scripts. Les None sont ignorés.
     """
     subset = os.environ.get("FIT_TRAIN_SUBSET")
     if subset:
@@ -129,7 +126,8 @@ def fit_settings(models_dir, coreset_pct, train_subset, overrides=None):
     imagesize = int(os.environ.get("FIT_IMAGESIZE", "224"))
     on_gpu, threads = _faiss("FIT")
     settings = {
-        "seed": 0,
+        # Surchargeable, à la différence de l'amont : sans ça, pas de barre d'erreur.
+        "seed": int(os.environ.get("FIT_SEED", "0")),
         "train_subset": train_subset,
         "backbone_name": os.environ.get("FIT_BACKBONE", "wideresnet50"),
         "layers_to_extract_from": (
@@ -151,8 +149,7 @@ def fit_settings(models_dir, coreset_pct, train_subset, overrides=None):
         "_models_dir": os.environ.get("FIT_MODELS_DIR", models_dir),
     }
     settings.update({k: v for k, v in (overrides or {}).items() if v is not None})
-    # `resize` est dérivé d'imagesize : le laisser au défaut après une surcharge
-    # d'imagesize donnerait un cadrage incohérent avec la banque.
+    # resize dérive d'imagesize : le figer donnerait un cadrage incohérent.
     if overrides and "imagesize" in overrides and "resize" not in overrides:
         settings["resize"] = round(settings["imagesize"] * 256 / 224)
     return settings
@@ -177,10 +174,9 @@ def build_tag(cfg):
 
 class _ProgressLoader:
     """Proxy d'itération sur le DataLoader, pour suivre l'avancement du fit.
-
-    PatchCore.fit() parcourt son argument sous tqdm et n'offre aucun rappel :
-    on s'insère ici plutôt que dans patchcore/, laissé conforme à l'amont. tqdm
-    appelle len() sur ce qu'il enveloppe, d'où le __len__.
+    
+    PatchCore.fit() n'offre aucun rappel ; on s'insère ici plutôt que dans
+    patchcore/, laissé conforme à l'amont. tqdm appelle len(), d'où __len__.
     """
 
     def __init__(self, loader, n_images, callback):
@@ -195,15 +191,14 @@ class _ProgressLoader:
         batches = len(self._loader)
         for i, batch in enumerate(self._loader, 1):
             yield batch
-            # En images plutôt qu'en lots : c'est l'unité que l'utilisateur a
-            # saisie. Le dernier lot est incomplet, d'où le plafond.
+            # En images, l'unité saisie par l'utilisateur ; dernier lot incomplet d'où le plafond.
             self._callback(min(i * BATCH_SIZE, self._n_images), self._n_images)
 
 
 def _subset_indices(n_total, n_wanted, seed, random_subset):
-    """Les indices retenus pour le fit. Triés dans les deux cas : l'ordre de
-    parcours ne change rien au résultat, et un ordre croissant lit le disque
-    séquentiellement."""
+    """Les indices retenus pour le fit, triés : l'ordre ne change pas le résultat
+    et un ordre croissant lit le disque séquentiellement.
+    """
     if n_wanted is None or n_wanted >= n_total:
         return None
     if not random_subset:
@@ -216,12 +211,9 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
             progress=None, random_subset=False, overrides=None,
             num_workers=NUM_WORKERS):
     """Construit la banque sur le split TRAIN et l'écrit dans <models_dir>/<tag>.
-
-    `progress(phase, done, total)` suit l'avancement (total nul = indéterminé).
-    `random_subset` tire les images au hasard plutôt que de prendre les
-    premières — sous le même seed, donc reproductible. `num_workers` à 0 charge
-    les images sur le thread appelant, sans processus fils. Renvoie le dossier
-    écrit.
+    
+    `progress(phase, done, total)` suit l'avancement, total nul = indéterminé.
+    `random_subset` tire au hasard sous le même seed. Renvoie le dossier écrit.
     """
     cfg = fit_settings(models_dir, coreset_pct, train_subset, overrides)
     threads, save_root = cfg.pop("_faiss_threads"), cfg.pop("_models_dir")
@@ -264,9 +256,7 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
-    # La sélection du coreset suit l'extraction, dans le même appel et sans
-    # rappel possible : on bascule de phase au dernier lot. Total nul = barre
-    # indéterminée, faute de savoir combien de temps elle prendra.
+    # Le coreset suit l'extraction sans rappel possible : on bascule au dernier lot.
     n_images = len(dataset)
 
     def _features_done(done, total):
@@ -376,9 +366,11 @@ def run_histogram(spec, bank_dir, output_path, log_project, n_per_class):
         "gpu_name": (
             torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu"
         ),
+        # Sans les couches, deux runs ne différant que par elles sont indistinguables.
         **{k: fit_config[k] for k in (
-            "seed", "train_subset", "backbone_name", "sampler_name",
-            "coreset_pct", "resize", "imagesize", "memory_bank_size",
+            "seed", "train_subset", "backbone_name", "layers_to_extract_from",
+            "sampler_name", "coreset_pct", "resize", "imagesize",
+            "memory_bank_size", "patchsize",
         )},
         **{k: fit_config[k] for k in ("node", "cluster") if k in fit_config},
     }
@@ -453,8 +445,7 @@ def run_histogram(spec, bank_dir, output_path, log_project, n_per_class):
     run_name = "hist-ts{}-p{:g}-nn{}".format(
         fit_config["train_subset"], fit_config["coreset_pct"], num_nn
     )
-    # Sidecar garanti, MLflow best-effort : son file store sur NFS lève un
-    # "Stale file handle" quand des tâches parallèles se disputent le verrou.
+    # Sidecar garanti, MLflow best-effort : son file store NFS lâche en parallèle.
     try:
         with patchcore.tracking.patchcore_run(
             experiment=log_project, run_name=run_name, params=params
@@ -486,8 +477,7 @@ def run_heatmaps(spec, bank_dir, output_path, image_index, n_per_class):
     """Superpose la heatmap sur une image (image_index) ou sur n par classe."""
     bank_dir = os.environ.get("HIST_BANK_DIR", bank_dir)
     output_path = os.environ.get("HEATMAP_OUTPUT_PATH", output_path)
-    # None = autoscale par image (incomparable d'une image à l'autre) ; deux
-    # bornes fixes = échelle commune sur un lot.
+    # None = autoscale par image ; deux bornes = échelle commune sur un lot.
     vmin = float(os.environ.get("HEATMAP_VMIN", "0"))
     vmax = float(os.environ.get("HEATMAP_VMAX", "10"))
 

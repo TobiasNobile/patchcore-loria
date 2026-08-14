@@ -1,23 +1,14 @@
-"""Prépare un zip d'images « good » de MTD ou mSTC, prêt pour l'interface web.
+"""Zip d'images « good » de MTD ou mini-ShanghaiTech, prêt pour l'interface web.
 
-Les deux jeux servent de référence en détection d'anomalies, et tous deux ont
-une classe normale explicite — c'est elle seule qui entre dans une banque
-PatchCore.
+    python tools/dataset_export.py mtd
+    python tools/dataset_export.py stc --source ~/Downloads/archive.zip --scene 01
 
-    # Magnetic Tile Defects : les 952 tuiles sans défaut
-    python tools/dataset_export.py mtd --out data/benchmarks/mtd_free.zip
+MTD vient du dépôt GitHub d'origine. mSTC vient de la copie Kaggle, dont les
+frames sont déjà extraites ; passer --source évite d'en télécharger les 11,7 Go
+fichier par fichier, ce que l'API refuse au-delà de quelques centaines.
 
-    # mini ShanghaiTech Campus : 500 frames d'UNE caméra
-    python tools/dataset_export.py stc --scene 01 --count 500 \
-        --out data/benchmarks/stc_scene01.zip
-
-MTD vient du dépôt d'origine sur GitHub. mSTC vient de la copie Kaggle où les
-frames sont déjà extraites, ce qui permet de n'en tirer qu'un échantillon au
-lieu des 11,7 Go du jeu complet ; il faut un ~/.kaggle/kaggle.json.
-
-Une caméra par zip, et non les treize : PatchCore modélise le normal d'UNE
-scène. Mélanger des points de vue rend le normal hétérogène, et tout se met à
-scorer haut — le fond compris.
+Une caméra par zip : mélanger des points de vue rend le normal hétérogène, et
+tout se met à scorer haut, le fond compris.
 """
 
 import base64
@@ -70,9 +61,7 @@ def export_mtd(out, cache, count):
         _download(MTD_URL, archive)
 
     with zipfile.ZipFile(archive) as src:
-        # Le dossier Imgs contient les photos (.jpg) ET les masques de défaut
-        # (.png) ; seules les photos nous intéressent, et MT_Free n'a de toute
-        # façon pas de défaut à masquer.
+        # Imgs contient photos (.jpg) et masques (.png) ; seules les photos servent.
         members = [n for n in src.namelist()
                    if MTD_GOOD_DIR in n and n.lower().endswith(".jpg")]
         members.sort()
@@ -102,11 +91,9 @@ def _kaggle_auth():
 
 class _RateLimiter:
     """Espace les requêtes, tous threads confondus.
-
-    Kaggle sert les fichiers un par un sans broncher à une requête par seconde,
-    mais répond 404 — pas 429 — dès qu'on pousse : mesuré 51 réussites sur 500
-    avec 8 workers, contre 11 sur 12 en séquentiel. L'échec étant muet, mieux
-    vaut ne jamais s'en approcher.
+    
+    Kaggle répond 404 — pas 429 — dès qu'on pousse : 51 réussites sur 500 avec
+    8 workers, contre 11 sur 12 en séquentiel. L'échec est muet.
     """
 
     def __init__(self, interval):
@@ -124,10 +111,9 @@ class _RateLimiter:
 
 
 def _stc_frame(auth, clip, index, limiter, retries=3):
-    """Une frame, par son numéro dans le clip. Renvoie les octets JPEG.
-
-    Un 404 est parfois transitoire : on réessaie avant de conclure que la frame
-    manque réellement du miroir."""
+    """Une frame par son numéro dans le clip. Un 404 est parfois transitoire, d'où
+    les réessais avant de conclure qu'elle manque.
+    """
     name = "{}/frames/{}/{:03d}.jpg".format(STC_ROOT, clip, index)
     url = KAGGLE_FILE_URL.format(ds=STC_DATASET, f=urllib.parse.quote(name))
     for attempt in range(1, retries + 1):
@@ -141,12 +127,7 @@ def _stc_frame(auth, clip, index, limiter, retries=3):
 
 
 def _archive_frames(archive, scene):
-    """Les frames d'une archive STC non décompressée, groupées par clip.
-
-    Lire dans le zip évite de le décompresser : l'archive Kaggle pèse 11,7 Go et
-    n'en contient que quelques centaines d'utiles. Son index se lit en une
-    fraction de seconde même à 173 000 entrées.
-    """
+    """Les frames d'une archive STC non décompressée, groupées par clip."""
     clips = {}
     with zipfile.ZipFile(archive) as zf:
         for name in zf.namelist():
@@ -164,10 +145,8 @@ def _archive_frames(archive, scene):
 
 
 def _local_frames(source, scene):
-    """Les frames d'une copie locale de STC, groupées par clip.
-
-    Accepte n'importe quelle racine contenant un dossier `frames/` : le zip
-    Kaggle décompressé, ou l'archive officielle une fois les vidéos découpées.
+    """Les frames d'une copie locale, groupées par clip. Trouve `frames/` à
+    n'importe quelle profondeur sous la racine donnée.
     """
     root = None
     for base, dirs, _ in os.walk(source):
@@ -193,9 +172,9 @@ def _local_frames(source, scene):
 
 
 def export_stc_local(out, source, scene, count, step):
-    """Construit le zip depuis une copie locale — dossier décompressé ou archive
-    telle qu'elle a été téléchargée. Seul chemin tenable au-delà de quelques
-    centaines d'images, l'API fichier-par-fichier de Kaggle se fermant avant."""
+    """Construit le zip depuis une copie locale, dossier ou archive. Seul chemin
+    tenable au-delà de quelques centaines d'images.
+    """
     from_zip = source.lower().endswith(".zip")
     if from_zip:
         clips = _archive_frames(source, scene)
@@ -205,9 +184,7 @@ def export_stc_local(out, source, scene, count, step):
     total = sum(len(v) for v in clips.values())
     LOGGER.info("Source %s : %d clips, %d frames.", origin, len(clips), total)
 
-    # Une frame sur `step` dans CHAQUE clip, puis répartition du quota sur
-    # l'ensemble : la banque doit voir toute la journée filmée, pas les
-    # premières secondes du premier clip.
+    # Une frame sur `step` dans chaque clip, puis quota réparti : la banque doit voir toute la scène.
     wanted = []
     for clip in sorted(clips):
         wanted.extend(clips[clip][::step])
@@ -260,9 +237,7 @@ def export_stc(out, cache, scene, count, step, workers, interval):
     LOGGER.info("Scène %s : %d clips, %d frames disponibles.",
                 scene, len(clips), sum(n for _, n in clips))
 
-    # Une frame sur `step`, puis on répartit le quota sur tous les clips plutôt
-    # que de vider le premier : la banque doit voir toute la variabilité de la
-    # scène (heures, densité de passants), pas trente secondes de vidéo.
+    # Idem : réparti sur les clips plutôt que de vider le premier.
     wanted = []
     for clip, frames in clips:
         wanted.extend((clip, i) for i in range(0, frames, step))
@@ -336,10 +311,10 @@ def mtd(out, cache, count):
               help="Secondes entre deux requêtes, tous workers confondus.")
 def stc(scene, count, step, out, cache, source, workers, interval):
     """mini ShanghaiTech Campus — les frames d'entraînement d'une caméra.
-
-    `--scene all` traverse les 13 caméras : pratique pour un gros jeu, mais le
-    normal devient hétérogène et PatchCore y perd — une caméra à la fois reste
-    le réglage sain."""
+    
+    `--scene all` traverse les 13 caméras, mais le normal devient hétérogène et
+    PatchCore y perd : une caméra à la fois reste le réglage sain.
+    """
     out = out or "data/benchmarks/stc_scene{}.zip".format(scene)
     if source:
         n = export_stc_local(out, source, scene, count, step)

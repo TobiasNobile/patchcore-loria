@@ -1,13 +1,9 @@
-"""Dataset « une scène » : des images capturées sur place, rangées en dossiers.
+"""Dataset « une scène » : les images capturées sur place, rangées en dossiers.
 
-C'est le format de déploiement — on fitte la banque sur le normal de la scène
-réelle plutôt que sur un dataset public. Arborescence attendue :
-
-    <racine>/normal/    images du fonctionnement nominal (obligatoire)
+    <racine>/normal/    fonctionnement nominal (obligatoire)
     <racine>/anomaly/   contre-exemples, seulement pour calibrer un seuil
 
-TRAIN = tout `normal/`. TEST = un tirage de `normal/` (jamais vu au fit) + tout
-`anomaly/`, découpage déterministe par `seed`.
+TRAIN = tout normal/ moins un holdout de 20 %, qui rejoint anomaly/ dans TEST.
 """
 
 import os

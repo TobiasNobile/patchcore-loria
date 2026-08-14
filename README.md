@@ -5,14 +5,27 @@ l'implémentation de `PatchCore` (Roth et al., 2021, <https://arxiv.org/abs/2106
 Code amont sous Apache 2.0, historique git conservé depuis le commit initial.
 
 **Retiré de l'amont** : les scripts MVTec (`bin/mvtec/`), les modèles pré-entraînés
-et les exemples `sample_*.sh`. `src/patchcore/` n'est pas modifié.
+et les exemples `sample_*.sh`.
+
+**Modifié dans l'amont** — quatre fichiers, aucun ne change les résultats
+(`git diff upstream/main -- src/patchcore/` pour les relire) :
+
+| fichier | modification | pourquoi |
+| --- | --- | --- |
+| `sampler.py` | projection par blocs ; boucle du coreset réécrite sans matrice `(N, k)` ni recalcul des normes | le nuage non projeté de 20 000 images pèse 60 Go, plus que le GPU. Sélection **numériquement identique** : mêmes indices que l'amont à ancres égales |
+| `patchcore.py` | `_fill_memory_bank` préalloue le tableau final au lieu de `np.concatenate` | `concatenate` fait coexister la liste et son résultat, soit 120 Go pour 20 000 images |
+| `utils.py` | `set_torch_device` vérifie `cuda.is_available()` et retombe sur CPU en le signalant | l'amont renvoyait un device cuda inexistant et échouait plus loin, sans rapport apparent |
+| `datasets/mvtec.py` | ajoute `transform_mean` / `transform_std` | purement additif ; les heatmaps en ont besoin pour dénormaliser l'image |
+
+`common.py` est identique à l'amont. `banks.py`, `packaging.py`, `uploads.py`,
+`tracking.py` et `datasets/{celeba,coco}.py` sont des ajouts.
 
 **Ajouté** : l'interface web `main.py` (construire une banque depuis un zip
 d'images, puis scorer la webcam), le format de banque `coresets/*.pkg`, les
 expériences one-class sur CelebA (chapeau) et COCO (couteau) dans
 `bin/<dataset>/`, leurs pipelines partagés dans `src/experiments/`, le scoring
 webcam en direct (`bin/live_camera.py`, `bin/live_web.py`), le banc de mesure
-d'une frame (`bin/bench_live.py`), et les lanceurs Grid'5000 / DCE Metz.
+d'une frame (`bin/bench_live.py`).
 
 Contact amont pour PatchCore lui-même : karsten.rh1@gmail.com.
 
@@ -104,13 +117,64 @@ bin/
   pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
 
 src/experiments/            # métriques et pipelines partagés par les datasets
-tools/                      # coco_fetch.py, mlflow_import.py
+tools/
+  coco_fetch.py             # télécharge les seules images COCO nécessaires
+  dataset_export.py         # zips « good » de MTD et mini-ShanghaiTech
+  aggregate_runs.py         # moyenne ± écart-type par configuration
+  mlflow_import.py          # rapatrie les runs distants dans mlruns.db
 models/<dataset>/<tag>/     # banques mémoire des scripts de recherche (gitignoré)
 results/<tâche>/<sortie>/   # figures et mesures (gitignoré)
 ```
 
 Les scripts live déduisent de la banque où écrire leurs captures
 (`results/<tâche>/captures/<couche>/<coreset>/v<vmax>/`).
+
+## Reproductibilité et seeds
+
+`FIT_SEED` fixe le tirage de bout en bout : sous-ensemble d'images
+d'entraînement, initialisation de la projection du coreset, échantillon de test
+équilibré. Deux seeds donnent donc deux banques et deux mesures indépendantes.
+Il apparaît dans le nom du dossier de banque et dans celui du `.pkg`, si bien
+qu'un même réglage rejoué n'écrase pas le précédent.
+
+```shell
+SEEDS="0 1 2" bash bin/coco/sweep_seeds.sh    # une config, plusieurs tirages
+python tools/aggregate_runs.py results/coco --markdown
+```
+
+`aggregate_runs.py` regroupe les sidecars par configuration — identité lue dans
+le nom de la banque, seed retiré — et sort moyenne ± écart-type. Il réduit
+d'abord par seed : deux sidecars d'un même seed sont des doublons, et leur
+dispersion n'est pas une variance de tirage. Une configuration à un seul seed est
+marquée `n=1`, son écart-type étant inconnu et non nul.
+
+**Ce que les résultats publiés plus bas ne disent pas encore.** Tous les runs
+existants sont en seed 0, sans réplication : les écarts entre lignes n'ont pas de
+barre d'erreur, et la non-monotonie COCO (0,837 à 40 k, 0,627 à 50 k) est pour
+l'instant indissociable du bruit de tirage. Les sidecars antérieurs à août 2026
+n'enregistraient pas `layers_to_extract_from` — la couche ne s'y lit que par le
+nom du dossier de banque, ce que l'agrégateur exploite pour rester utilisable sur
+l'historique.
+
+**Deux biais de protocole à connaître.** Le prétraitement est un `Resize` suivi
+d'un `CenterCrop` : les défauts hors du centre sont invisibles et les faux
+positifs artificiellement réduits. Et il n'existe pas de split de validation —
+seuils et échelles de couleur sont choisis en regardant le test.
+
+## Rendu de la heatmap
+
+Trois constantes de `bin/live_web.py` gouvernent l'affichage, et donc les
+captures. Aucune ne touche aux scores.
+
+| constante | rôle |
+| --- | --- |
+| `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
+| `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
+| `SMOOTHING_FRAMES` = 10 | profondeur des agrégations `moyenne` / `maximum` proposées dans la page |
+
+L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
+qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
+pas un voile bleu.
 
 ## CelebA — résumé des résultats
 
@@ -145,7 +209,7 @@ d'entraînement, le fit dépasse la journée de calcul et la mémoire d'un nœud
 ordinaire (le nuage brut atteint 60 Go, doublé pendant sa concaténation).
 
 Reproduction : `FIT_TRAIN_SUBSET=<n> FIT_CORESET_PCT=<p> bash
-bin/celeba/fit_and_score.sh`, ou via `./grid5000_run.sh`.
+bin/celeba/fit_and_score.sh`.
 
 ### Balayage de couches (single-layer, ts=20000, coreset 5 %, 3 NN)
 
@@ -207,7 +271,7 @@ Device : `PATCHCORE_DEVICE` = `auto` (cuda sinon cpu) | `cpu` | `cuda[:N]` | `mp
 MPS est exclu de l'automatique — PatchCore y échoue sur le pooling adaptatif, et
 s'y révèle plus lent que le CPU (embed 29,8 contre 15,2 ms à 128 px).
 
-GPU (Grid'5000, NVIDIA L40S, `INFER_FAISS_GPU=1`) :
+GPU (NVIDIA L40S, `INFER_FAISS_GPU=1`) :
 
 | backbone | taille | coreset | banque | preprocess | embed | faiss | post | encode | scoring | FPS | AUROC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -241,8 +305,9 @@ expérience par tâche (`celeba-histograms`, `celeba-heatmap`) :
 mlflow ui --backend-store-uri sqlite:///mlruns.db
 ```
 
-Les runs distants sont fusionnés dans cette base au moment du rapatriement
-(`./grid5000_run.sh --fetch`), via `tools/mlflow_import.py`.
+Les runs distants sont fusionnés dans cette base via `tools/mlflow_import.py`.
+MLflow reste du confort : la source de vérité est le sidecar JSON écrit à côté de
+chaque figure, que `tools/aggregate_runs.py` relit.
 
 ## Security
 

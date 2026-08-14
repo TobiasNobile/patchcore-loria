@@ -1,14 +1,9 @@
-"""Point d'entrée : l'interface web de construction de banque et de scoring live.
+"""Point d'entrée : l'interface web de fit et de scoring live.
 
-    python main.py                    # puis ouvrir http://127.0.0.1:8000
-    python main.py --port 9000
-    python main.py --host 0.0.0.0     # à n'utiliser que sur un réseau de confiance
+    python main.py            # puis ouvrir http://127.0.0.1:8000
 
-La page n'a pas d'authentification et le fit accepte une archive arbitraire :
-elle est faite pour tourner sur la loopback de la machine qui filme.
-
-Le code de l'application est dans bin/live_web.py ; ce fichier n'existe que
-pour donner au dépôt une entrée évidente.
+Sans authentification : à garder sur la loopback. Le code est dans
+bin/live_web.py ; ce fichier ne sert qu'à donner au dépôt une entrée évidente.
 """
 
 import os
