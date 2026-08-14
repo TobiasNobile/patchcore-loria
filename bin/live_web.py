@@ -79,32 +79,44 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
 
-# Deux plafonds distincts, pour deux saturations distinctes une fois la distance
-# au-delà de vmax :
-#  - COLORMAP_HIGH borne l'indice dans la rampe jet, dont le sommet est un
-#    bordeaux sombre où deux distances très différentes rendent la même couleur ;
-#  - OPACITY_MAX borne le mélange, sinon la couleur remplace l'image à 100 % et
-#    l'objet le plus anormal est précisément celui qu'on ne voit plus.
-# COLORMAP_LOW relève le bas de la rampe hors du bleu nuit ; il ne se voit pas,
-# l'opacité y étant quasi nulle.
-COLORMAP_LOW = 0.2
+# Bornes de la rampe jet, appliquées en écrêtage — clip(normalized, LOW, HIGH) —
+# et non en rééchelonnement : le milieu de la rampe garde sa correspondance avec
+# le score, seuls les deux bouts inexploitables sont coupés. Au-delà de HIGH le
+# jet vire au bordeaux sombre, où deux distances très différentes rendent la même
+# couleur ; sous LOW il plonge dans le bleu nuit, invisible de toute façon
+# puisque l'opacité y est quasi nulle.
+COLORMAP_LOW = 0.1
 COLORMAP_HIGH = 0.9
+
+# Plafond du mélange, distinct des précédents : à 1 la couleur remplace l'image
+# et l'objet le plus anormal est justement celui qu'on ne voit plus.
 OPACITY_MAX = 0.9
 
-# Profondeur du lissage optionnel, en frames SCORÉES. Sans lui, rien n'est
-# agrégé : le score et la heatmap sont ceux de la dernière inférence.
+# Profondeur des agrégations optionnelles, en frames SCORÉES. Sans elles, rien
+# n'est agrégé : le score et la heatmap sont ceux de la dernière inférence.
 SMOOTHING_FRAMES = 10
+SMOOTHING_MODES = ("none", "mean", "max")
 
 
-def aggregate(values, averaging):
-    """Moyenne les dernières valeurs scorées, ou rend la dernière telle quelle.
+def aggregate(values, mode):
+    """Agrège les dernières valeurs scorées. Rend la dernière telle quelle en
+    mode `none`.
 
     Sert aux deux natures : une liste de scores (scalaires) ou une liste de
     cartes 2D, `axis=0` réduisant le temps dans les deux cas.
+
+    `mean` stabilise mais dilue : un objet vu sur une seule frame voit son
+    intensité divisée par la profondeur de la fenêtre. `max` fait l'inverse — il
+    retient le pic, donc un passage fugace reste allumé, au prix d'une tache qui
+    ne s'éteint qu'au bout de SMOOTHING_FRAMES inférences.
     """
     if not len(values):
         return None
-    return np.mean(values, axis=0) if averaging else values[-1]
+    if mode == "mean":
+        return np.mean(values, axis=0)
+    if mode == "max":
+        return np.max(values, axis=0)
+    return values[-1]
 
 
 def clamp_alpha(value):
@@ -124,7 +136,7 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     )
     # Couleur et opacité sont bornées séparément : la première pour rester dans
     # la partie lisible de la rampe, la seconde pour laisser l'objet transparaître.
-    ramp = COLORMAP_LOW + normalized * (COLORMAP_HIGH - COLORMAP_LOW)
+    ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
     colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     # (H, W, 1) diffusé sur les 3 canaux BGR. Avec normalized ∈ [0, 1] et
@@ -200,7 +212,7 @@ class Runner:
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "alpha": HEATMAP_ALPHA, "stride": 1, "averaging": False,
+            "alpha": HEATMAP_ALPHA, "stride": 1, "smoothing": "none",
         }
 
     def state(self):
@@ -220,8 +232,8 @@ class Runner:
                 self._live["alpha"] = clamp_alpha(fields["alpha"])
             if fields.get("stride") is not None:
                 self._live["stride"] = max(1, int(fields["stride"]))
-            if fields.get("averaging") is not None:
-                self._live["averaging"] = bool(fields["averaging"])
+            if fields.get("smoothing") in SMOOTHING_MODES:
+                self._live["smoothing"] = fields["smoothing"]
 
     def snapshot(self):
         """Enregistre la frame courante AVEC heatmap (l'overlay affiché) dans
@@ -290,7 +302,7 @@ class Runner:
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
                 "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
                 "stride": max(1, int(params.get("stride", 1))),
-                "averaging": bool(params.get("averaging")),
+                "smoothing": params.get("smoothing", "none"),
             }
         self._wake.set()
         return True, None
@@ -475,7 +487,7 @@ class Runner:
             # coûterait sans rien changer.
             heatmaps = deque(maxlen=SMOOTHING_FRAMES)
             smoothed = heatmap
-            smoothed_on = False
+            smoothed_mode = "none"
             threshold = params["threshold"]
             frame_index = 0
             fps = 0.0
@@ -498,7 +510,7 @@ class Runner:
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
                     alpha = self._live["alpha"]
                     stride = self._live["stride"]
-                    averaging = self._live["averaging"]
+                    smoothing = self._live["smoothing"]
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
@@ -506,15 +518,15 @@ class Runner:
                     batch_scores, batch_masks = patchcore_instance.predict(tensor)
                     infer_ms = 1000.0 * (time.perf_counter() - t0)
                     scores.append(float(batch_scores[0]))
-                    score = float(aggregate(list(scores), averaging))
+                    score = float(aggregate(list(scores), smoothing))
                     verdict = (
                         None if threshold is None
                         else ("anomalie" if score >= threshold else "ok")
                     )
                     heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
-                    smoothed = aggregate(list(heatmaps), averaging)
-                    smoothed_on = averaging
+                    smoothed = aggregate(list(heatmaps), smoothing)
+                    smoothed_mode = smoothing
                     self._update(score=score, infer_ms=infer_ms, verdict=verdict)
 
                 # Encodé à chaque frame, même non scorée : l'aperçu reste fluide
@@ -522,7 +534,7 @@ class Runner:
                 # date de la dernière inférence : si le mode a changé depuis, on
                 # retombe sur la carte brute plutôt que d'afficher une agrégation
                 # périmée le temps de la frame scorée suivante.
-                shown = smoothed if averaging == smoothed_on else heatmap
+                shown = smoothed if smoothing == smoothed_mode else heatmap
                 ok_enc, buf = cv2.imencode(
                     ".jpg", overlay_heatmap(preview, shown, vmin, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
@@ -750,7 +762,9 @@ class Handler(BaseHTTPRequestHandler):
                              else clamp_alpha(params["alpha"]),
                     "threshold": None if params.get("threshold") is None
                                  else float(params["threshold"]),
-                    "averaging": bool(params.get("averaging")),
+                    "smoothing": (params.get("smoothing")
+                                  if params.get("smoothing") in SMOOTHING_MODES
+                                  else "none"),
                     "loop": bool(params.get("loop")),
                     "device": str(params.get("device") or "auto"),
                     "faiss_threads": max(1, int(params.get("faiss_threads") or FAISS_NUM_WORKERS)),

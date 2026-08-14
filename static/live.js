@@ -39,7 +39,7 @@ function readParams() {
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
     alpha: alphaExp(),
-    averaging: $("averaging").checked,
+    smoothing: smoothingMode(),
     threshold: t === "" ? null : parseFloat(t),
     loop: $("loop").checked,
     device: $("device").value,
@@ -297,12 +297,20 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 });
 $("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
 
-// À part des champs numériques : une case se lit sur .checked, pas sur .value.
-// Rien ne la réécrit depuis l'état serveur — une case qu'un poll repositionne
-// devient impossible à cocher. C'est la ligne d'état, plus bas, qui dit ce qui
-// est réellement appliqué.
-$("averaging").addEventListener("change", () =>
-  post("/api/update", { averaging: $("averaging").checked }));
+// Deux cases plutôt qu'un groupe de radios : il faut pouvoir n'en cocher
+// aucune. Elles s'excluent donc à la main — « moyenne ET maximum » n'a pas de
+// sens. Rien ne les réécrit depuis l'état serveur : une case qu'un poll
+// repositionne devient impossible à cocher. C'est la ligne d'état, plus bas,
+// qui dit ce qui est réellement appliqué.
+const smoothingMode = () =>
+  $("smooth_mean").checked ? "mean" : $("smooth_max").checked ? "max" : "none";
+
+[["smooth_mean", "smooth_max"], ["smooth_max", "smooth_mean"]].forEach(([id, other]) => {
+  $(id).addEventListener("change", () => {
+    if ($(id).checked) $(other).checked = false;
+    post("/api/update", { smoothing: smoothingMode() });
+  });
+});
 
 $("snap").addEventListener("click", async () => {
   const res = await post("/api/snapshot");
@@ -340,10 +348,11 @@ function apply(s) {
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
-  const active = (s.live || {}).averaging;
+  const MODES = { mean: "moyenne", max: "maximum" };
+  const active = MODES[(s.live || {}).smoothing];
   $("meta").textContent = s.running
     ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
-      `${s.frames} frames · lissage ${active ? "moyenne " + SMOOTHING_FRAMES : "aucun"}`
+      `${s.frames} frames · lissage ${active ? active + " " + SMOOTHING_FRAMES : "aucun"}`
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
