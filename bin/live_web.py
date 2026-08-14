@@ -291,7 +291,7 @@ class Runner:
             else:
                 self._run(params)
 
-    # ─── Fit ───────────────────────────────────────────────────────────────
+    # À partir de là c'est du fit 
 
     def _fit_bank(self, params):
         """Zip d'images -> banque -> coresets/<nom>.pkg.
