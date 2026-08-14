@@ -36,8 +36,9 @@ HEATMAP_VMIN = 0.0
 HEATMAP_VMAX = 10.0
 HEATMAP_ALPHA = 0.5
 
-# Fenêtre de la médiane glissante. Médiane : absorbe les frames aberrantes.
-SMOOTH_WINDOW = 5
+# Profondeur des agrégations optionnelles, en frames scorées.
+SMOOTHING_FRAMES = 10
+SMOOTHING_MODES = ("none", "mean", "max")
 
 # Racine des instantanés ; le sous-dossier vient de --bank_dir.
 SNAPSHOT_ROOT = "results"
@@ -45,6 +46,19 @@ SNAPSHOT_ROOT = "results"
 FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
 # Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault.
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
+
+
+def aggregate(values, mode):
+    """
+    Agrège les dernières valeurs scorées ; `none` rend la dernière telle quelle.
+    """
+    if not len(values):
+        return None
+    if mode == "mean":
+        return np.mean(values, axis=0)
+    if mode == "max":
+        return np.max(values, axis=0)
+    return values[-1]
 
 
 def build_transform(fit_config):
@@ -129,6 +143,10 @@ def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
 @click.option("--zoom", default=1.0, show_default=True,
               help="Recadrage centré avant prétraitement (2.0 = moitié centrale). "
                    "Sert à approcher le cadrage serré d'une banque de visages.")
+@click.option("--smoothing", type=click.Choice(SMOOTHING_MODES), default="none",
+              show_default=True,
+              help="Agrège score et heatmap sur les {} dernières frames scorées, "
+                   "comme les cases de l'interface web.".format(SMOOTHING_FRAMES))
 @click.option("--flip/--no-flip", default=True, show_default=True,
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
 @click.option("--loop/--no-loop", default=False, show_default=True,
@@ -138,7 +156,7 @@ def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
                    "de la couche : ~10 (layer3), ~20 (layer2), ~260 (layer4).")
 @click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
               help="Borne basse de couleur du heatmap.")
-def main(bank_dir, source, stride, zoom, flip, loop, vmax, vmin):
+def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
     tune_faiss_small_batches()
     device = select_device()
 
@@ -164,7 +182,9 @@ def main(bank_dir, source, stride, zoom, flip, loop, vmax, vmin):
         snapshot_dir,
     )
 
-    scores = deque(maxlen=SMOOTH_WINDOW)
+    scores = deque(maxlen=SMOOTHING_FRAMES)
+    # Cartes scorées récentes ; l'agrégat n'est recalculé qu'à l'inférence.
+    heatmaps = deque(maxlen=SMOOTHING_FRAMES)
     heatmap = np.zeros((fit_config["imagesize"], fit_config["imagesize"]), np.float32)
     score = float("nan")
     infer_ms = 0.0
@@ -192,9 +212,9 @@ def main(bank_dir, source, stride, zoom, flip, loop, vmax, vmin):
                 batch_scores, batch_masks = patchcore_instance.predict(tensor)
                 infer_ms = 1000.0 * (time.perf_counter() - t0)
                 scores.append(float(batch_scores[0]))
-                # Médiane sur la fenêtre : robuste aux frames aberrantes.
-                score = float(np.median(scores))
-                heatmap = np.asarray(batch_masks[0])
+                score = float(aggregate(list(scores), smoothing))
+                heatmaps.append(np.asarray(batch_masks[0]))
+                heatmap = aggregate(list(heatmaps), smoothing)
 
             now = time.perf_counter()
             # Lissage exponentiel : le fps brut saute trop pour être lu.

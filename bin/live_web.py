@@ -34,6 +34,9 @@ from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
+    SMOOTHING_FRAMES,
+    SMOOTHING_MODES,
+    aggregate,
     build_transform,
     preprocess,
     resolve_device,
@@ -75,25 +78,6 @@ COLORMAP_HIGH = 0.9
 
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
-
-# Profondeur des agrégations optionnelles, en frames scorées.
-SMOOTHING_FRAMES = 10
-SMOOTHING_MODES = ("none", "mean", "max")
-
-
-def aggregate(values, mode):
-    """Agrège les dernières valeurs scorées ; `none` rend la dernière telle quelle.
-    
-    `mean` stabilise mais dilue un pic bref ; `max` le retient, au prix d'une
-    tache qui met SMOOTHING_FRAMES inférences à s'éteindre.
-    """
-    if not len(values):
-        return None
-    if mode == "mean":
-        return np.mean(values, axis=0)
-    if mode == "max":
-        return np.max(values, axis=0)
-    return values[-1]
 
 
 def clamp_alpha(value):
