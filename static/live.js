@@ -463,6 +463,9 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   // se propager dans la course de l'alpha.
   ALPHA_MAX = cfg.alpha_max ?? ALPHA_MAX;
   ALPHA_DEFAULT = cfg.alpha_default ?? ALPHA_DEFAULT;
+  // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
+  // avant l'envoi, une valeur trop haute ne rendant qu'une bouillie floue.
+  if (cfg.zoom_max) $("zoom").max = cfg.zoom_max;
   $("faiss_threads").value = cfg.faiss_threads;
   $("faiss_gpu").checked = cfg.faiss_gpu;
 

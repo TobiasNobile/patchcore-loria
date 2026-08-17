@@ -89,10 +89,20 @@ COLORMAP_HIGH = 0.9
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
+# Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
+# il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
+# rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
+ZOOM_MAX = 8.0
+
 
 def clamp_alpha(value):
     """Un exposant négatif inverserait la rampe et sortirait l'alpha de [0, 1]."""
     return min(max(float(value), 0.0), HEATMAP_ALPHA_MAX)
+
+
+def clamp_zoom(value):
+    """Sous 1 le recadrage n'a pas de sens, au-delà de ZOOM_MAX on n'y voit rien."""
+    return min(max(float(value), 1.0), ZOOM_MAX)
 
 
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
@@ -183,9 +193,11 @@ class Runner:
     def update_live(self, fields):
         """Zoom / échelle couleur / opacité / stride, ajustables en marche."""
         with self._lock:
-            for k in ("zoom", "vmin", "vmax"):
+            for k in ("vmin", "vmax"):
                 if fields.get(k) is not None:
                     self._live[k] = float(fields[k])
+            if fields.get("zoom") is not None:
+                self._live["zoom"] = clamp_zoom(fields["zoom"])
             if fields.get("alpha") is not None:
                 self._live["alpha"] = clamp_alpha(fields["alpha"])
             if fields.get("stride") is not None:
@@ -251,7 +263,7 @@ class Runner:
             )
             # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
             self._live = {
-                "zoom": float(params.get("zoom", 1.0)),
+                "zoom": clamp_zoom(params.get("zoom", 1.0)),
                 "vmin": HEATMAP_VMIN,
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
                 "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
@@ -554,6 +566,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({
                 "alpha_max": HEATMAP_ALPHA_MAX,
                 "alpha_default": HEATMAP_ALPHA,
+                "zoom_max": ZOOM_MAX,
                 "faiss_threads": FAISS_NUM_WORKERS,
                 "faiss_gpu": FAISS_ON_GPU,
                 "backbones": [
@@ -744,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
                     "bank_dir": str(params["bank_dir"]),
                     "source": str(params.get("source", "0")),
                     "stride": max(1, int(params.get("stride") or 1)),
-                    "zoom": float(params.get("zoom") or 1.0),
+                    "zoom": clamp_zoom(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
                     # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
                     "alpha": HEATMAP_ALPHA if params.get("alpha") is None
