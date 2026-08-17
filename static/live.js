@@ -27,12 +27,28 @@ function alphaRender() {
   return e;
 }
 
+// Une route que le serveur ne connaît pas répond « not found » en texte brut.
+// Sans ce filet, JSON.parse lève une SyntaxError et la page l'affiche telle
+// quelle, alors que la cause est ailleurs : page et statiques sont relus du
+// disque à chaque appel, le module Python une seule fois au démarrage — donc un
+// serveur lancé avant une mise à jour sert la nouvelle page et l'ancienne API.
+async function readJson(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const hint = response.status === 404 ? " — serveur à redémarrer ?" : "";
+    return { error: `Réponse inattendue (HTTP ${response.status}) : ` +
+                    `${text.slice(0, 60)}${hint}` };
+  }
+}
+
 async function post(path, body) {
   const r = await fetch(path, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
-  return r.json();
+  return readJson(r);
 }
 
 function readParams() {
@@ -326,7 +342,7 @@ $("video").addEventListener("change", async () => {
   try {
     const r = await fetch("/api/video?name=" + encodeURIComponent(file.name),
                           { method: "POST", body: file });
-    res = await r.json();
+    res = await readJson(r);
   } catch (err) {
     res = { error: "Envoi interrompu : " + err };
   }
