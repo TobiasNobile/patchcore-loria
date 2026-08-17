@@ -27,18 +27,21 @@
       <label>Couches<small>où extraire les features ; l3 seule sépare souvent le mieux</small></label>
       <div id="layers" class="checks"></div>
 
-      <label for="coreset_pct">Coreset<small>fraction des patchs gardée en banque
-        (0,01 = 1 %)</small></label>
-      <!-- step doit diviser (valeur - min) : avec min=0,001 un pas de 0,005
-           n'accepterait que 0,001 / 0,006 / 0,011… et refuserait 0,01. -->
-      <input id="coreset_pct" name="coreset_pct" type="number"
-             min="0.001" max="1" step="0.001" value="0.01">
-
-      <label for="train_subset">Images d'entraînement<small>tirage aléatoire dans
-        l'archive ; vide = toutes. Plafonné à <b id="maximages">20000</b> images,
-        au-delà elles sont tirées au hasard</small></label>
-      <input id="train_subset" name="train_subset" type="number" min="1" step="1"
-             placeholder="toutes">
+      <!-- Deux champs courts sur une ligne : cf. .pair dans live.css. Les labels
+           sont alignés en bas pour que les champs restent sur la même ligne même
+           si une aide passe sur deux lignes. -->
+      <div class="pair">
+        <label for="coreset_pct">Coreset<small>fraction des patchs gardée
+          (0,01 = 1 %)</small></label>
+        <label for="train_subset">Images du fit<small>vide = toutes, plafond
+          <b id="maximages">20000</b></small></label>
+        <!-- step doit diviser (valeur - min) : avec min=0,001 un pas de 0,005
+             n'accepterait que 0,001 / 0,006 / 0,011… et refuserait 0,01. -->
+        <input id="coreset_pct" name="coreset_pct" type="number"
+               min="0.001" max="1" step="0.001" value="0.01">
+        <input id="train_subset" name="train_subset" type="number" min="1" step="1"
+               placeholder="toutes">
+      </div>
 
       <label>Images sans l'anomalie à détecter<small>un sous-dossier anomaly/ est
         repris s'il existe, et ne sert qu'à calibrer un seuil</small></label>
@@ -138,25 +141,21 @@
 
     <h2 class="spaced">Affichage <span class="hint">réglable en direct</span></h2>
 
-    <label for="stride">Stride<small>ne score qu'une frame sur N ; l'aperçu reste fluide</small></label>
-    <div class="slider">
+    <div class="pair">
+      <label for="stride">Stride<small>ne score qu'une frame sur N</small></label>
+      <label for="zoom">Zoom<small>recadrage centré</small></label>
       <input id="stride" class="live" type="number" min="1" step="1" value="3">
-    </div>
-
-    <label for="zoom">Zoom<small>recadrage centré</small></label>
-    <div class="slider">
       <input id="zoom" class="live" type="number" min="1" step="0.1" value="1">
     </div>
 
     <label for="vmax">Valeur max de normalisation de la heatmap<small>conseillé
       <span id="vmaxhint">—</span></small></label>
-    <div class="slider">
-      <input id="vmax" class="live" type="number" min="1" step="1" value="10">
-    </div>
+    <input id="vmax" class="live" type="number" min="1" step="1" value="10">
 
   </section>
 </main>
 
 <script src="/static/live.js"></script>
+
 </body>
 </html>

@@ -6,77 +6,101 @@
 
 * { box-sizing: border-box; }
 
+/* Une page, une hauteur d'écran : la caméra et ses réglages doivent tenir sous
+   les yeux, sinon on ajuste un curseur en aveugle. D'où la colonne fixe
+   ci-dessous et un cadre vidéo dimensionné en vh, pas en pixels. */
+html, body { height: 100%; }
+
 body {
-  margin: 0; padding: 24px;
+  margin: 0; padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 10px; overflow: hidden;
   background: var(--bg); color: var(--ink);
   font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 /* ─── Bandeau : quelle banque tourne, et ce qu'il faut en savoir ─────────── */
 #bankbar {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 16px; margin-bottom: 24px;
+  border-bottom: 1px solid var(--line); padding-bottom: 8px; flex: none;
 }
 #bankname {
-  font-size: 26px; font-weight: 600; letter-spacing: -0.01em;
+  font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
   word-break: break-all;
 }
-#chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+#chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 6px;
   border: 1px solid var(--line); border-radius: 999px;
-  padding: 4px 12px; font-size: 12px; background: var(--panel);
+  padding: 2px 9px; font-size: 11px; background: var(--panel);
 }
 .chip b { font-weight: 600; }
 .chip span { color: var(--faint); text-transform: uppercase; font-size: 10px;
              letter-spacing: .06em; }
 
 /* ─── Trois colonnes : avant / pendant / réglages d'affichage ────────────── */
+/* `minmax(0, 1fr)` en ligne et `min-height: 0` : sans eux une colonne trop
+   haute pousse la grille au-delà de l'écran au lieu de se borner. */
+/* Colonnes larges à dessein : à 244 px la moitié des aides passait sur deux
+   lignes, et ces lignes-là sont ce qui faisait défiler la page. */
 main {
-  display: grid; gap: 28px; align-items: start;
-  grid-template-columns: 260px minmax(320px, 1fr) 260px;
+  display: grid; gap: 16px; flex: 1; min-height: 0;
+  grid-template-columns: 288px minmax(300px, 1fr) 288px;
+  grid-template-rows: minmax(0, 1fr);
 }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+/* Fenêtre étroite ou vraiment basse : le défilement reprend la main plutôt que
+   d'écraser les champs. */
+@media (max-width: 900px), (max-height: 560px) {
+  body { height: auto; overflow: visible; }
+  main { grid-template-columns: 1fr; grid-template-rows: none; }
+}
 
-.panel { border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.panel {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  min-height: 0; overflow-y: auto;
+}
 .panel h2 {
-  margin: 0 0 14px; font-size: 12px; text-transform: uppercase;
+  margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
   letter-spacing: .08em; color: var(--muted); font-weight: 600;
 }
 .panel h2 .hint { text-transform: none; letter-spacing: 0; color: var(--faint);
                   font-weight: 400; margin-left: 6px; }
 
-label { display: block; margin-bottom: 4px; color: #374151; }
-label + input, label + select, label + .slider { margin-bottom: 14px; }
+label { display: block; margin-bottom: 3px; color: #374151; }
+label + input, label + select, label + .slider { margin-bottom: 9px; }
 label small { display: block; color: var(--faint); font-size: 11px;
-              font-weight: 400; line-height: 1.35; margin-top: 1px; }
+              font-weight: 400; line-height: 1.3; margin-top: 1px; }
 
-input, select { font: inherit; width: 100%; padding: 7px 9px;
+input, select { font: inherit; width: 100%; padding: 5px 9px;
                 border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
 input:focus, select:focus { outline: 2px solid #111; outline-offset: -1px; }
 input:disabled, select:disabled { background: #f3f4f6; color: var(--faint); }
 
-label.check { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 14px; }
+label.check { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 9px; }
 label.check input { width: auto; margin-top: 2px; flex: none; }
 
-.panel h2.spaced { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.panel h2.spaced { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 /* Couches du backbone : cases courtes, alignées sur une ligne si ça tient. */
-.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 14px; }
+.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 9px; }
+
+/* Deux champs courts côte à côte : une ligne de moins à faire tenir à l'écran. */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px;
+        margin-bottom: 9px; }
+.pair > label { align-self: end; }
+.pair > input { margin-bottom: 0; }
 .checks label.check { margin-bottom: 0; }
 input[type=file] { padding: 6px; font-size: 12px; }
 
 /* Avancement du fit. La phase sans compteur (sélection du coreset) n'a pas de
    pourcentage honnête à afficher : barre pleine qui respire, pas un chiffre. */
 #fitbar { height: 6px; border-radius: 3px; background: var(--line);
-          overflow: hidden; margin-top: 12px; }
+          overflow: hidden; margin-top: 10px; }
 #fitbar[hidden] { display: none; }
 #fitfill { height: 100%; width: 0; background: var(--ink); transition: width .3s; }
 #fitfill.pending { animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
 #fitstatus { color: var(--muted); font-size: 12px; min-height: 16px;
-             margin: 8px 0 0; word-break: break-all; }
-#fiterror { color: var(--bad); font-size: 12px; min-height: 16px; margin: 4px 0 0; }
+             margin: 6px 0 0; word-break: break-all; }
+#fiterror { color: var(--bad); font-size: 12px; min-height: 16px; margin: 2px 0 0; }
 
 .slider { display: flex; align-items: center; gap: 10px; }
 .slider input[type=range] { padding: 0; border: none; background: none; }
@@ -84,18 +108,22 @@ input[type=file] { padding: 6px; font-size: 12px; }
                  text-align: right; white-space: nowrap;
                  font-variant-numeric: tabular-nums; }
 
-.actions { display: flex; gap: 8px; margin-top: 18px; }
-button { font: inherit; padding: 8px 16px; border: 1px solid var(--ink);
+.actions { display: flex; gap: 8px; margin-top: 12px; }
+button { font: inherit; padding: 6px 14px; border: 1px solid var(--ink);
          border-radius: 6px; background: var(--ink); color: #fff; cursor: pointer; }
 button.secondary { background: #fff; color: var(--ink); }
 button:disabled { opacity: .35; cursor: default; }
-#error { color: var(--bad); font-size: 12px; min-height: 16px; margin: 10px 0 0; }
+#error { color: var(--bad); font-size: 12px; min-height: 16px; margin: 8px 0 0; }
 
 /* ─── Scène ──────────────────────────────────────────────────────────────── */
-#stage { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+#stage { display: flex; flex-direction: column; align-items: center; gap: 6px;
+         min-height: 0; overflow-y: auto; }
+/* Taille prise sur la hauteur de fenêtre, pas sur la largeur de colonne : c'est
+   la hauteur qui manque, et le carré doit laisser la place au score et aux deux
+   réglages sous lui. `min()` garde la colonne comme plafond. */
 #camframe {
-  position: relative; width: 100%; max-width: 420px; aspect-ratio: 1;
-  border-radius: 10px; overflow: hidden; background: #f3f4f6;
+  position: relative; width: min(100%, 46vh, 420px); flex: none;
+  aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #f3f4f6;
 }
 #cam { width: 100%; height: 100%; object-fit: cover; display: block;
        image-rendering: pixelated; }
@@ -110,10 +138,10 @@ button:disabled { opacity: .35; cursor: default; }
 #flash.shoot { animation: shutter .3s ease-out; }
 @keyframes shutter { from { opacity: .85; } to { opacity: 0; } }
 
-#score { font-size: 72px; font-weight: 600; line-height: 1;
+#score { font-size: clamp(28px, 7vh, 72px); font-weight: 600; line-height: 1;
          font-variant-numeric: tabular-nums; }
-#status { font-size: 15px; letter-spacing: .1em; text-transform: uppercase;
-          min-height: 20px; }
+#status { font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
+          min-height: 17px; }
 .idle { color: var(--faint); }
 #meta { color: var(--muted); font-size: 12px; min-height: 16px;
         font-variant-numeric: tabular-nums; }
@@ -123,8 +151,8 @@ button:disabled { opacity: .35; cursor: default; }
 /* Réglages sous la caméra. #stage centre ses enfants ; on rétablit un alignement
    à gauche et on cale la largeur sur celle du cadre vidéo pour que l'ensemble
    reste une colonne. */
-#stagecontrols { width: 100%; max-width: 420px; text-align: left; margin-top: 4px; }
-#stagecontrols > label:first-child { margin-bottom: 8px; }
+#stagecontrols { width: min(100%, 420px); text-align: left; margin-top: 2px; }
+#stagecontrols label.check { margin-bottom: 8px; }
 
 #notice {
   border: 1px solid #f0c000; background: #fffbeb; color: #7a5b00;
@@ -132,3 +160,24 @@ button:disabled { opacity: .35; cursor: default; }
   text-align: center;
 }
 #notice[hidden] { display: none; }
+
+/* ─── Écran bas : même page, un cran plus serrée ─────────────────────────── */
+/* Rien n'est masqué, seulement resserré. En dessous, les colonnes défilent
+   chacune de leur côté (cf. `overflow-y` des panneaux) plutôt que de rogner un
+   champ. */
+@media (max-height: 760px) {
+  body { padding: 10px 14px; gap: 8px; }
+  .panel { padding: 10px; }
+  .panel h2 { margin-bottom: 8px; }
+  .panel h2.spaced { margin-top: 10px; padding-top: 8px; }
+  label + input, label + select, label + .slider, .pair, .checks { margin-bottom: 6px; }
+  label.check { margin-bottom: 6px; }
+  label small { font-size: 10px; }
+  input, select { padding: 4px 8px; }
+  input[type=file] { padding: 4px; font-size: 11px; }
+  .actions { margin-top: 8px; }
+  #fitstatus, #fiterror, #error, #meta, #capture { min-height: 14px; }
+  #bankname { font-size: 16px; }
+  /* Le carré rend la place qu'il faut au score et aux réglages sous lui. */
+  #camframe { width: min(100%, 40vh, 420px); }
+}

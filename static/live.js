@@ -431,7 +431,6 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   $("coreset_pct").value = cfg.default_coreset_pct;
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
-  $("train_subset").placeholder = `toutes (max ${MAX_IMAGES})`;
   $("maximages").textContent = MAX_IMAGES;
   SMOOTHING_FRAMES = cfg.smoothing_frames ?? SMOOTHING_FRAMES;
   $("smoothwin").textContent = SMOOTHING_FRAMES;
