@@ -106,6 +106,15 @@
 
       <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
       <input id="source" name="source" value="0">
+      <!-- Un repli, pas un lien vers la doc OpenCV : la page tourne en local,
+           souvent sans réseau, et hors du <label> pour qu'un clic n'aille pas
+           focaliser le champ. -->
+      <details class="formats">
+        <summary>voir les formats disponibles</summary>
+        <p>Vidéo mp4, mov, avi, mkv, webm · image png, jpg, bmp, tif, webp (une
+          seule frame) · séquence <code>img_%04d.png</code> · flux http(s), rtsp,
+          rtmp, udp. Une URL de mp4 exige un serveur qui gère <code>Range</code>.</p>
+      </details>
 
       <label class="check">
         <input id="loop" name="loop" type="checkbox">
