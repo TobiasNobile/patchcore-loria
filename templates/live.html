@@ -35,7 +35,8 @@
              min="0.001" max="1" step="0.001" value="0.01">
 
       <label for="train_subset">Images d'entraînement<small>tirage aléatoire dans
-        l'archive ; vide = toutes</small></label>
+        l'archive ; vide = toutes. Plafonné à <b id="maximages">20000</b> images,
+        au-delà elles sont tirées au hasard</small></label>
       <input id="train_subset" name="train_subset" type="number" min="1" step="1"
              placeholder="toutes">
 

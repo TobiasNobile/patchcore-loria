@@ -92,7 +92,9 @@ images en met 320 dans la banque, et la page affiche les deux chiffres.
 
 Le coût du fit est dominé par la sélection du coreset, quadratique en nombre de
 patchs : quelques centaines d'images passent en secondes sur un portable, 20 000
-demandent des heures et un GPU. Pour une démo filmée sur place, quelques
+demandent des heures et un GPU. C'est aussi le plafond : au-delà de 20 000 images
+utilisables, la page (dossier) ou le serveur (zip) en tire 20 000 au hasard, un
+sous-dossier `anomaly/` restant gardé entier. Pour une démo filmée sur place, quelques
 centaines d'images du décor réel valent mieux que des milliers d'images
 génériques (cf. « Déploiement sur une scène réelle » plus bas).
 

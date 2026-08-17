@@ -64,6 +64,10 @@ FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
 FIT_LAYERS = ("layer1", "layer2", "layer3", "layer4")
 FIT_DEFAULT_LAYERS = ("layer2", "layer3")
 FIT_DEFAULT_CORESET_PCT = 0.01
+# Plafond du nombre d'images retenues pour la banque, quoi qu'on envoie : la
+# sélection du coreset est quadratique en nombre de patchs, 20 000 images
+# demandent déjà des heures et un GPU. Au-delà, le tirage est aléatoire.
+FIT_MAX_IMAGES = 20_000
 
 # Plafond d'un upload : au-delà c'est une erreur de manipulation.
 MAX_UPLOAD_BYTES = 8 * 1024 ** 3
@@ -306,8 +310,11 @@ class Runner:
             counts = patchcore.uploads.extract_images(params["archive"], staging)
             available = counts[patchcore.uploads.NORMAL]
             # Le nom dit ce qui est vraiment entré : 20 000 demandés sur 400 images donnent ts400.
-            subset = params["train_subset"]
-            subset = None if not subset else min(subset, available)
+            # Le plafond s'applique même sans demande — un zip de 50 000 images
+            # n'en fitte que FIT_MAX_IMAGES, tirées au hasard (random_subset).
+            subset = min(params["train_subset"] or available, available, FIT_MAX_IMAGES)
+            # Rien d'écarté : tsall plutôt qu'un ts<n> qui ferait croire à un tirage.
+            subset = None if subset >= available else subset
             self._update_fit(images=available)
 
             def progress(phase, done, total):
@@ -550,6 +557,7 @@ class Handler(BaseHTTPRequestHandler):
                 "layers": list(FIT_LAYERS),
                 "default_layers": list(FIT_DEFAULT_LAYERS),
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
+                "max_images": FIT_MAX_IMAGES,
                 "smoothing_frames": SMOOTHING_FRAMES,
                 "banks": find_banks(),
             })

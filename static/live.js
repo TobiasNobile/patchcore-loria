@@ -13,6 +13,9 @@ const liveFields = [...document.querySelectorAll(
 // diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).
 let ALPHA_MAX = 4, ALPHA_DEFAULT = 2;
 let SMOOTHING_FRAMES = 10;
+// Plafond d'images pour la banque, relu de /api/config : le serveur l'applique
+// de son côté, la page s'en sert pour tirer avant de zipper.
+let MAX_IMAGES = 20000;
 let BANKS = {};
 
 const alphaExp = () => ALPHA_MAX * Math.pow(parseFloat($("alpha").value), 2);
@@ -197,6 +200,22 @@ async function buildZip(files, onProgress) {
   return new Blob([...parts, ...central, end], { type: "application/zip" });
 }
 
+// Un sous-dossier anomaly/ ne sert qu'à calibrer un seuil : il est gardé entier,
+// le plafond ne s'applique qu'aux images de la banque.
+const isAnomaly = (f) => (f.webkitRelativePath || "")
+  .toLowerCase().split("/").slice(0, -1).includes("anomaly");
+
+// Tirage sans remise (Fisher-Yates partiel) : on ne brasse que les n premières
+// places, le reste de la liste n'a pas à être ordonné.
+function sample(files, n) {
+  const a = [...files];
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (a.length - i));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+
 async function fitBody() {
   if (srcMode() === "zip") {
     const file = $("archive").files[0];
@@ -205,15 +224,28 @@ async function fitBody() {
   }
   const images = [...$("folder").files].filter((f) => IMAGE_RE.test(f.name));
   if (!images.length) throw new Error("Aucune image (jpg, png, bmp) dans ce dossier.");
-  if (images.length > ZIP_MAX_FILES) {
-    throw new Error(`${images.length} images : au-delà de ${ZIP_MAX_FILES}, zipper le dossier à la main.`);
+
+  // Le tirage a lieu ici et non côté serveur : inutile de zipper puis d'envoyer
+  // des images qui ne seraient pas fittées — et un gros dossier passerait sinon
+  // sous les limites du zip ci-dessous.
+  const anomaly = images.filter(isAnomaly);
+  let normal = images.filter((f) => !isAnomaly(f));
+  let drawn = "";
+  if (normal.length > MAX_IMAGES) {
+    drawn = `${MAX_IMAGES} images tirées au hasard sur ${normal.length} · `;
+    normal = sample(normal, MAX_IMAGES);
   }
-  const bytes = images.reduce((n, f) => n + f.size, 0);
+  const kept = [...normal, ...anomaly];
+
+  if (kept.length > ZIP_MAX_FILES) {
+    throw new Error(`${kept.length} images : au-delà de ${ZIP_MAX_FILES}, zipper le dossier à la main.`);
+  }
+  const bytes = kept.reduce((n, f) => n + f.size, 0);
   if (bytes > ZIP_MAX_BYTES) {
     throw new Error(`${(bytes / 1024 ** 3).toFixed(1)} Go : au-delà de 3 Go, zipper le dossier à la main.`);
   }
-  return buildZip(images, (done, total) => {
-    $("fitstatus").textContent = `archive en préparation ${done}/${total}`;
+  return buildZip(kept, (done, total) => {
+    $("fitstatus").textContent = `${drawn}archive en préparation ${done}/${total}`;
   });
 }
 
@@ -403,6 +435,10 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
     <label class="check"><input type="checkbox" value="${l}"
       ${cfg.default_layers.includes(l) ? "checked" : ""}><span>${l}</span></label>`).join("");
   $("coreset_pct").value = cfg.default_coreset_pct;
+  MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
+  $("train_subset").max = MAX_IMAGES;
+  $("train_subset").placeholder = `toutes (max ${MAX_IMAGES})`;
+  $("maximages").textContent = MAX_IMAGES;
   SMOOTHING_FRAMES = cfg.smoothing_frames ?? SMOOTHING_FRAMES;
   $("smoothwin").textContent = SMOOTHING_FRAMES;
 
