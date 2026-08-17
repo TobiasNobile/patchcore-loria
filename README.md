@@ -173,7 +173,7 @@ captures. Aucune ne touche aux scores.
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
 | `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `SMOOTHING_FRAMES` = 10 | profondeur des agrégations `moyenne` / `maximum` proposées dans la page |
+| `SMOOTHING_FRAMES` = 10 | profondeur de l'agrégation par `maximum` que propose la case « Lissage » de la page (`bin/live_camera.py` offre aussi la moyenne, en ligne de commande) |
 
 L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,

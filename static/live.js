@@ -329,20 +329,15 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 });
 $("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
 
-// Deux cases plutôt qu'un groupe de radios : il faut pouvoir n'en cocher
-// aucune. Elles s'excluent donc à la main — « moyenne ET maximum » n'a pas de
-// sens. Rien ne les réécrit depuis l'état serveur : une case qu'un poll
-// repositionne devient impossible à cocher. C'est la ligne d'état, plus bas,
-// qui dit ce qui est réellement appliqué.
-const smoothingMode = () =>
-  $("smooth_mean").checked ? "mean" : $("smooth_max").checked ? "max" : "none";
+// Une seule case, donc un seul mode : le maximum. La moyenne stabilisait mais
+// diluait un objet vu sur une seule frame — l'inverse de ce qu'on cherche ici.
+// Rien ne réécrit la case depuis l'état serveur : une case qu'un poll
+// repositionne devient impossible à cocher. C'est la ligne d'état, plus bas, qui
+// dit ce qui est réellement appliqué.
+const smoothingMode = () => ($("smooth_max").checked ? "max" : "none");
 
-[["smooth_mean", "smooth_max"], ["smooth_max", "smooth_mean"]].forEach(([id, other]) => {
-  $(id).addEventListener("change", () => {
-    if ($(id).checked) $(other).checked = false;
-    post("/api/update", { smoothing: smoothingMode() });
-  });
-});
+$("smooth_max").addEventListener("change", () =>
+  post("/api/update", { smoothing: smoothingMode() }));
 
 $("snap").addEventListener("click", async () => {
   const res = await post("/api/snapshot");
@@ -377,11 +372,10 @@ function apply(s) {
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
-  const MODES = { mean: "moyenne", max: "maximum" };
-  const active = MODES[(s.live || {}).smoothing];
+  const active = (s.live || {}).smoothing === "max";
   $("meta").textContent = s.running
     ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
-      `${s.frames} frames · lissage ${active ? active + " " + SMOOTHING_FRAMES : "aucun"}`
+      `${s.frames} frames · lissage ${active ? "maximum " + SMOOTHING_FRAMES : "aucun"}`
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
