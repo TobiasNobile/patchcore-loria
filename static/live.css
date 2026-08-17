@@ -90,6 +90,12 @@ label.check input { width: auto; margin-top: 2px; flex: none; }
                    text-decoration: underline; text-underline-offset: 2px; }
 .formats summary::-webkit-details-marker { display: none; }
 .formats p { margin: 4px 0 0; line-height: 1.35; }
+/* Vide tant qu'aucune vidéo n'a été envoyée : `:empty` évite de réserver une
+   ligne pour rien dans une colonne dont la hauteur est comptée. */
+#videostatus { color: var(--muted); font-size: 11px; margin: 4px 0 0;
+               word-break: break-all; }
+#videostatus:empty { display: none; }
+#videostatus.bad { color: var(--bad); }
 .formats code { font-size: 10px; background: var(--panel);
                 border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
 
@@ -180,7 +186,9 @@ button:disabled { opacity: .35; cursor: default; }
   body { padding: 10px 14px; gap: 8px; }
   .panel { padding: 10px; }
   .panel h2 { margin-bottom: 8px; }
-  .panel h2.spaced { margin-top: 10px; padding-top: 8px; }
+  .panel h2.spaced { margin-top: 8px; padding-top: 6px; }
+  label { margin-bottom: 2px; }
+  .formats { margin-bottom: 6px; }
   label + input, label + select, label + .slider, .pair, .checks { margin-bottom: 6px; }
   label.check { margin-bottom: 6px; }
   label small { font-size: 10px; }

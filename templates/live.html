@@ -116,6 +116,14 @@
           rtmp, udp. Une URL de mp4 exige un serveur qui gère <code>Range</code>.</p>
       </details>
 
+      <!-- Un fichier choisi n'expose jamais son chemin au navigateur : on
+           l'envoie au serveur, qui répond par un chemin à recopier ci-dessus. -->
+      <!-- Sans aide : la ligne d'état affiche le chemin obtenu dès l'envoi, ce
+           qui dit mieux où le fichier est allé qu'une phrase par avance. -->
+      <label for="video">…ou envoyer une vidéo</label>
+      <input id="video" type="file" accept=".mp4,.mov,.avi,.mkv,.webm,.m4v,video/*">
+      <p id="videostatus"></p>
+
       <label class="check">
         <input id="loop" name="loop" type="checkbox">
         <span>Boucler<small>rejouer un fichier sans fin</small></span>

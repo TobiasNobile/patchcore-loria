@@ -72,6 +72,12 @@ FIT_MAX_IMAGES = 20_000
 # Plafond d'un upload : au-delà c'est une erreur de manipulation.
 MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 
+# Vidéos envoyées depuis la page, ensuite reprises comme source de scoring. Le
+# navigateur ne livre jamais le chemin d'un fichier choisi : sans cet envoi, une
+# source locale doit être tapée à la main.
+VIDEOS_DIR = os.path.join("data", "videos", "uploads")
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v")
+
 # Exposant du canal alpha et son plafond ; la page en déduit la course du curseur.
 HEATMAP_ALPHA = 2.0
 HEATMAP_ALPHA_MAX = 4.0
@@ -598,9 +604,24 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # onglet fermé ou rechargé
 
+    def _save_body(self, out, length):
+        """Recopie le corps de la requête dans `out`, par blocs.
+
+        Renvoie les octets manquants — non nul si la connexion a été coupée en
+        cours d'envoi, ce qui laisse un fichier tronqué à effacer.
+        """
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break  # connexion coupée en cours d'envoi
+            out.write(chunk)
+            remaining -= len(chunk)
+        return remaining
+
     def _receive_fit(self):
         """Reçoit l'archive et lance le fit.
-        
+
         Corps brut plutôt que multipart : il se recopie sur disque par blocs sans
         jamais tenir en mémoire.
         """
@@ -645,18 +666,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         fd, archive = tempfile.mkstemp(prefix="patchcore-upload-", suffix=".zip")
-        remaining = length
         with os.fdopen(fd, "wb") as out:
-            while remaining > 0:
-                chunk = self.rfile.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    break  # connexion coupée en cours d'envoi
-                out.write(chunk)
-                remaining -= len(chunk)
-        if remaining > 0:
+            missing = self._save_body(out, length)
+        if missing:
             os.remove(archive)
             self._json({"error": "Envoi interrompu ({} octets manquants).".format(
-                remaining)}, 400)
+                missing)}, 400)
             return
 
         params["archive"] = archive
@@ -665,10 +680,60 @@ class Handler(BaseHTTPRequestHandler):
             os.remove(archive)
         self._json({"ok": ok, "error": err}, 200 if ok else 409)
 
+    def _receive_video(self):
+        """Range une vidéo envoyée depuis la page et renvoie son chemin.
+
+        La page recopie ce chemin dans Source : rien d'autre ne change au
+        démarrage, la boucle ouvre un fichier comme n'importe quel autre.
+        """
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        name = os.path.basename((query.get("name") or [""])[0])
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in VIDEO_EXTENSIONS:
+            self._json({"error": "Format refusé : « {} ». Attendu : {}.".format(
+                ext or name or "sans extension", ", ".join(VIDEO_EXTENSIONS))}, 400)
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            self._json({"error": "Aucune vidéo reçue."}, 400)
+            return
+        if length > MAX_UPLOAD_BYTES:
+            self._json({"error": "Vidéo de {:.1f} Go, au-delà de la limite de "
+                                 "{:.0f} Go.".format(length / 1024 ** 3,
+                                                     MAX_UPLOAD_BYTES / 1024 ** 3)}, 413)
+            return
+
+        # Nom reconstruit, jamais celui du client : il ne doit ni sortir du
+        # dossier, ni écraser un envoi précédent.
+        os.makedirs(VIDEOS_DIR, exist_ok=True)
+        slug = patchcore.packaging.slugify(stem, "video")
+        path = os.path.join(VIDEOS_DIR, slug + ext.lower())
+        i = 2
+        while os.path.exists(path):
+            path = os.path.join(VIDEOS_DIR, "{}_{}{}".format(slug, i, ext.lower()))
+            i += 1
+
+        with open(path, "wb") as out:
+            missing = self._save_body(out, length)
+        if missing:
+            os.remove(path)
+            self._json({"error": "Envoi interrompu ({} octets manquants).".format(
+                missing)}, 400)
+            return
+
+        LOGGER.info("Vidéo reçue : %s (%.0f Mo)", path, length / 1024 ** 2)
+        # Chemin relatif au dossier de lancement, comme celui qu'on taperait.
+        self._json({"ok": True, "path": path})
+
     def do_POST(self):
-        # Avant toute lecture du corps : l'archive peut peser des gigaoctets.
-        if self.path.split("?")[0] == "/api/fit":
+        # Avant toute lecture du corps : archive et vidéo pèsent des gigaoctets.
+        route = self.path.split("?")[0]
+        if route == "/api/fit":
             self._receive_fit()
+            return
+        if route == "/api/video":
+            self._receive_video()
             return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"

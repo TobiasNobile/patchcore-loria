@@ -312,6 +312,33 @@ function applyFit(f) {
   return running;
 }
 
+// ─── Vidéo envoyée depuis la page ──────────────────────────────────────────
+// Corps brut, comme l'archive du fit : le File est passé tel quel à fetch, donc
+// rien ne tient en mémoire, et le serveur répond par le chemin à mettre dans
+// Source. C'est le seul moyen d'utiliser un fichier local sans taper son chemin.
+$("video").addEventListener("change", async () => {
+  const file = $("video").files[0];
+  if (!file) return;
+  const status = $("videostatus");
+  status.classList.remove("bad");
+  status.textContent = `envoi de ${file.name}…`;
+  let res;
+  try {
+    const r = await fetch("/api/video?name=" + encodeURIComponent(file.name),
+                          { method: "POST", body: file });
+    res = await r.json();
+  } catch (err) {
+    res = { error: "Envoi interrompu : " + err };
+  }
+  if (res.error) {
+    status.classList.add("bad");
+    status.textContent = res.error;
+    return;
+  }
+  $("source").value = res.path;
+  status.textContent = `${res.path} · ${(file.size / 1024 ** 2).toFixed(0)} Mo`;
+});
+
 // ─── Cycle de vie ──────────────────────────────────────────────────────────
 liveForm.addEventListener("submit", async (e) => {
   e.preventDefault();
