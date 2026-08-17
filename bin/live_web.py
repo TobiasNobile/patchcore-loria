@@ -1,7 +1,7 @@
 """Interface web : construire une banque PatchCore, puis scorer la webcam.
 
-À gauche on constitue une banque depuis un zip d'images du nominal, à droite on
-la charge et on score la caméra. Serveur stdlib, loopback, sans authentification.
+À gauche on constitue une banque depuis un zip d'images sans l'anomalie à
+détecter, à droite on la charge et on score la caméra. Serveur stdlib, loopback, sans authentification.
 
 Le fit et la boucle de scoring s'excluent : tous deux tournent sur le thread
 principal, seul endroit où torch est sûr sur macOS.

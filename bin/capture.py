@@ -3,8 +3,8 @@
     python bin/capture.py --out data/scene/normal  --count 400 --every 0.5
     python bin/capture.py --out data/scene/anomaly --count 60
 
-Filmer le nominal sous toutes ses variations : tout ce qui n'est pas dans la
-banque sera scoré comme anormal.
+Filmer la scène sans l'anomalie à détecter, sous toutes ses variations : tout ce
+qui n'est pas dans la banque sera scoré comme anormal.
 """
 
 import logging

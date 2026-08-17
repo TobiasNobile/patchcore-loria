@@ -53,8 +53,8 @@ python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
 
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
-un backbone, les couches, le taux de coreset, un zip d'images du nominal, et
-« Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
+un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
+détecter, et « Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
 — source, stride, échelle couleur et alpha se règlent pendant que ça tourne.
 
 Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
@@ -85,10 +85,11 @@ python bin/pack_bank.py models/coco/wideresnet50_l3-l4_..._ts20000_s0 --task Det
 
 ### Le zip d'images
 
-Des images à plat = tout est du nominal. Un zip contenant `normal/` et
-`anomaly/` garde la séparation, les contre-exemples ne servant qu'à calibrer un
-seuil. 20 % du nominal est réservé hors banque pour ce calibrage : envoyer 400
-images en met 320 dans la banque, et la page affiche les deux chiffres.
+Des images à plat = toutes sont sans l'anomalie à détecter. Un zip contenant
+`normal/` et `anomaly/` garde la séparation, les contre-exemples ne servant qu'à
+calibrer un seuil. 20 % de ces images est réservé hors banque pour ce calibrage :
+envoyer 400 images en met 320 dans la banque, et la page affiche les deux
+chiffres.
 
 Le coût du fit est dominé par la sélection du coreset, quadratique en nombre de
 patchs : quelques centaines d'images passent en secondes sur un portable, 20 000
@@ -294,8 +295,8 @@ SCENE_PATH=data/scene python bin/scene/infer/histogram.py     # seuil à lire en
 python bin/live_web.py                                        # puis choisir la banque
 ```
 
-Filmer le nominal sous toutes ses variations : tout ce qui n'est pas dans la
-banque sera scoré comme anormal.
+Filmer la scène sans l'anomalie à détecter, sous toutes ses variations : tout ce
+qui n'est pas dans la banque sera scoré comme anormal.
 
 ## MLflow
 

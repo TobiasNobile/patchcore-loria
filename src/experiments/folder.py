@@ -1,6 +1,6 @@
 """Dataset « une scène » : les images capturées sur place, rangées en dossiers.
 
-    <racine>/normal/    fonctionnement nominal (obligatoire)
+    <racine>/normal/    images sans l'anomalie à détecter (obligatoire)
     <racine>/anomaly/   contre-exemples, seulement pour calibrer un seuil
 
 TRAIN = tout normal/ moins un holdout de 20 %, qui rejoint anomaly/ dans TEST.
