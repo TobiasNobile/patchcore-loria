@@ -439,16 +439,21 @@ function apply(s) {
   // changement de stride. Zéro = source pas encore ouverte (chargement de la
   // banque), et surtout pas « une seule carte ».
   const cartes = s.smoothing_frames;
-  const source = s.source_fps ? ` · source ${Math.round(s.source_fps)} fps` : "";
-  // Une carte, c'est la dernière inférence seule : à ce stride elle couvre déjà
-  // la durée visée, et cocher la case ne change alors rien à l'image.
-  const lissage = !active ? "aucun"
-    : !cartes ? "maximum…"
-    : cartes === 1 ? "sans effet à ce stride (1 carte)"
-    : `maximum ${cartes} cartes`;
+  // « maximum » ne disait plus rien depuis que la moyenne a disparu de la page :
+  // c'est le seul mode, autant annoncer ce qu'on voit — le nombre de cartes
+  // agrégées. Une carte, c'est la dernière inférence seule : à ce stride elle
+  // couvre déjà la durée visée, et cocher la case ne change rien à l'image.
+  // Tant que la source n'est pas ouverte, le segment saute plutôt que d'afficher
+  // un nombre qu'on ignore.
+  const lissage = !active ? "sans lissage"
+    : !cartes ? null
+    : cartes === 1 ? "lissage sans effet à ce stride"
+    : `lissage sur ${cartes} cartes`;
   $("meta").textContent = s.running
-    ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
-      `${s.frames} frames${source} · lissage ${lissage}`
+    ? [`${s.device || "…"}`, `${s.fps.toFixed(1)} fps`,
+       `${s.infer_ms.toFixed(0)} ms/inf`, `${s.frames} frames`,
+       s.source_fps ? `source ${Math.round(s.source_fps)} fps` : null,
+       lissage].filter(Boolean).join(" · ")
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
