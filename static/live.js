@@ -18,6 +18,9 @@ let SMOOTHING_FRAMES = 10;
 let MAX_IMAGES = 20000;
 let BANKS = {};
 
+const esc = (s) => String(s).replace(
+  /[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
 const alphaExp = () => ALPHA_MAX * Math.pow(parseFloat($("alpha").value), 2);
 
 function alphaRender() {
@@ -85,6 +88,7 @@ function showBank(dir) {
   const num = (v) => (v ? v.toLocaleString("fr") : null);
   const chips = [
     ["tâche", m.task],
+    ["dataset", m.dataset],
     ["backbone", m.backbone],
     ["couches", m.layers],
     ["coreset", m.coreset],
@@ -95,7 +99,9 @@ function showBank(dir) {
   ];
   $("chips").innerHTML = chips
     .filter(([, v]) => v)
-    .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${v}</b></div>`)
+    // Échappé : `dataset` vient d'un nom de fichier, que personne n'a filtré
+    // pour du HTML.
+    .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${esc(v)}</b></div>`)
     .join("");
 
   const hint = VMAX_HINT[m.layers];
@@ -122,6 +128,15 @@ function selectedLayers() {
 }
 
 const srcMode = () => document.querySelector('input[name="srcmode"]:checked').value;
+
+// Ce que l'utilisateur a désigné, pour l'inscrire dans la banque : le nom du zip,
+// ou le premier segment de webkitRelativePath, seul endroit où le nom du dossier
+// choisi survit — le navigateur n'en livre jamais le chemin.
+function datasetName() {
+  if (srcMode() === "zip") return ($("archive").files[0] || {}).name || "";
+  const first = $("folder").files[0];
+  return first ? (first.webkitRelativePath || "").split("/")[0] : "";
+}
 
 $("srcmode").addEventListener("change", () => {
   const dir = srcMode() === "dir";
@@ -286,6 +301,7 @@ fitForm.addEventListener("submit", async (e) => {
     layers: layers.join(","),
     coreset_pct: $("coreset_pct").value,
     train_subset: $("train_subset").value || "0",
+    dataset: datasetName(),
   });
   $("fitstatus").textContent = "envoi de l'archive…";
   // Corps brut plutôt que FormData : le serveur recopie le flux sur disque sans

@@ -105,6 +105,18 @@ def clamp_zoom(value):
     return min(max(float(value), 1.0), ZOOM_MAX)
 
 
+def clean_dataset(name):
+    """Nom du zip ou du dossier choisi pour le fit, gardé pour l'affichage.
+
+    Purement informatif — rien ne le relit — donc on le garde lisible (points,
+    espaces, accents) au lieu de le slugifier : seuls le chemin et les caractères
+    de contrôle sautent. `source` ne peut pas servir : il pointe le dossier de
+    transit, pas ce que l'utilisateur a désigné.
+    """
+    base = os.path.basename(str(name).replace("\\", "/").rstrip("/"))
+    return "".join(c for c in base if c.isprintable())[:80]
+
+
 def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
     
@@ -142,6 +154,7 @@ def find_banks():
             "bank_size": cfg.get("memory_bank_size", 0),
             "bank_gb": cfg.get("bank_gb", 0.0),
             "train_images": cfg.get("n_train_images"),
+            "dataset": cfg.get("dataset"),
         })
     return banks
 
@@ -347,7 +360,8 @@ class Runner:
             os.environ["SCENE_PATH"] = staging
             bank_dir = run_fit(
                 SCENE, models_dir=staging, coreset_pct=FIT_DEFAULT_CORESET_PCT,
-                extra_config={"source": staging, "task": params["task"]},
+                extra_config={"source": staging, "task": params["task"],
+                              "dataset": params["dataset"]},
                 progress=progress, random_subset=True,
                 # Pas de workers : leur spawn réimporte le module du serveur sur macOS.
                 num_workers=0,
@@ -651,6 +665,8 @@ class Handler(BaseHTTPRequestHandler):
                 "coreset_pct": float(field("coreset_pct") or FIT_DEFAULT_CORESET_PCT),
                 # 0 ou vide = toutes les images de l'archive.
                 "train_subset": int(field("train_subset") or 0),
+                # Nom du zip ou du dossier, tel que la page l'a vu.
+                "dataset": clean_dataset(field("dataset")),
             }
         except ValueError as exc:
             self._json({"error": "Paramètres invalides : {}".format(exc)}, 400)
