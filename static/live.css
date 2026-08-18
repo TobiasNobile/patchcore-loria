@@ -198,5 +198,5 @@ button:disabled { opacity: .35; cursor: default; }
   #fitstatus, #fiterror, #error, #meta, #capture { min-height: 14px; }
   #bankname { font-size: 16px; }
   /* Le carré rend la place qu'il faut au score et aux réglages sous lui. */
-  #camframe { width: min(100%, 40vh, 420px); }
+  #camframe { width: min(100%, 39vh, 420px); }
 }

@@ -449,6 +449,12 @@ function apply(s) {
     : !cartes ? null
     : cartes === 1 ? "lissage sans effet à ce stride"
     : `lissage sur ${cartes} cartes`;
+  // Le compte vit aussi sous la case, où on le lit sans avoir à cocher : c'est
+  // ce que le lissage ferait au stride courant. La ligne d'état, elle, ne parle
+  // que de ce qui s'applique vraiment.
+  $("smoothnow").textContent = cartes
+    ? ` — ${cartes} carte${cartes > 1 ? "s" : ""} en ce moment`
+    : "";
   $("meta").textContent = s.running
     ? [`${s.device || "…"}`, `${s.fps.toFixed(1)} fps`,
        `${s.infer_ms.toFixed(0)} ms/inf`, `${s.frames} frames`,
