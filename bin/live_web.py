@@ -70,6 +70,21 @@ FIT_DEFAULT_CORESET_PCT = 0.01
 # demandent déjà des heures et un GPU. Au-delà, le tirage est aléatoire.
 FIT_MAX_IMAGES = 20_000
 
+# Banque présélectionnée à l'ouverture de la page : sans elle, c'est la première
+# de coresets/ dans l'ordre alphabétique, qui n'a aucune raison d'être la bonne.
+# Comparaison par sous-chaîne sur le nom, pour survivre à un changement de
+# coreset ou de ts dans le nom du .pkg.
+DEFAULT_BANK = os.environ.get("LIVE_DEFAULT_BANK", "DetectionKnife_l3-l4")
+
+
+def default_bank_dir(banks):
+    """Le .pkg présélectionné, ou le premier si le motif ne correspond à rien."""
+    for bank in banks:
+        if DEFAULT_BANK.lower() in bank["name"].lower():
+            return bank["dir"]
+    return banks[0]["dir"] if banks else ""
+
+
 # Plafond d'un upload : au-delà c'est une erreur de manipulation.
 MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 
@@ -596,6 +611,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._serve_file(os.path.join(STATIC_DIR, name), ctype + "; charset=utf-8")
         elif self.path == "/api/config":
+            banks = find_banks()
             self._json({
                 "alpha_max": HEATMAP_ALPHA_MAX,
                 "alpha_default": HEATMAP_ALPHA,
@@ -611,7 +627,8 @@ class Handler(BaseHTTPRequestHandler):
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
                 "max_images": FIT_MAX_IMAGES,
                 "smoothing_seconds": SMOOTHING_SECONDS,
-                "banks": find_banks(),
+                "banks": banks,
+                "default_bank": default_bank_dir(banks),
             })
         elif self.path == "/api/banks":
             # Relu après un fit, pour peupler le sélecteur sans recharger la page.

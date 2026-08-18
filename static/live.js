@@ -522,7 +522,7 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   SMOOTHING_SECONDS = cfg.smoothing_seconds ?? SMOOTHING_SECONDS;
   $("smoothwin").textContent = SMOOTHING_SECONDS.toFixed(1).replace(".", ",");
 
-  fillBanks(cfg.banks);
+  fillBanks(cfg.banks, cfg.default_bank);
 
   $("alpha").value = Math.sqrt(ALPHA_DEFAULT / ALPHA_MAX);
   alphaRender();
