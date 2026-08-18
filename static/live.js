@@ -436,11 +436,19 @@ function apply(s) {
   const active = (s.live || {}).smoothing === "max";
   // Le nombre de cartes vient de l'état : il suit le stride et le fps de la
   // source, donc l'annoncer de mémoire côté page serait faux dès le premier
-  // changement de stride.
-  const cartes = s.smoothing_frames || 1;
+  // changement de stride. Zéro = source pas encore ouverte (chargement de la
+  // banque), et surtout pas « une seule carte ».
+  const cartes = s.smoothing_frames;
+  const source = s.source_fps ? ` · source ${Math.round(s.source_fps)} fps` : "";
+  // Une carte, c'est la dernière inférence seule : à ce stride elle couvre déjà
+  // la durée visée, et cocher la case ne change alors rien à l'image.
+  const lissage = !active ? "aucun"
+    : !cartes ? "maximum…"
+    : cartes === 1 ? "sans effet à ce stride (1 carte)"
+    : `maximum ${cartes} cartes`;
   $("meta").textContent = s.running
     ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
-      `${s.frames} frames · lissage ${active ? `maximum ${cartes} cartes` : "aucun"}`
+      `${s.frames} frames${source} · lissage ${lissage}`
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit

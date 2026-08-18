@@ -185,7 +185,9 @@ class Runner:
             "device": None,
             "device_note": None,
             # Nombre de cartes agrégées, déduit du fps de la source et du stride.
+            # 0 tant que la source n'est pas ouverte : la page n'a rien à annoncer.
             "smoothing_frames": 0,
+            "source_fps": 0.0,
         }
         # Avancement du fit. `total` nul = phase sans compteur (le coreset).
         self._fit = {
@@ -276,6 +278,7 @@ class Runner:
             self._state.update(
                 running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
                 error=None, params=params, device_note=None,
+                smoothing_frames=0, source_fps=0.0,
             )
             # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
             self._live = {
@@ -462,7 +465,7 @@ class Runner:
             )
             # Cartes scorées récentes et leur agrégat, recalculé à l'inférence seulement.
             heatmaps = deque(maxlen=window)
-            self._update(smoothing_frames=window)
+            self._update(smoothing_frames=window, source_fps=float(source_fps or 0))
             smoothed = heatmap
             smoothed_mode = "none"
             frame_index = 0
