@@ -12,7 +12,9 @@ const liveFields = [...document.querySelectorAll(
 // Course du curseur alpha : exposant = MAX * s². Quadratique pour placer la
 // diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).
 let ALPHA_MAX = 4, ALPHA_DEFAULT = 2;
-let SMOOTHING_FRAMES = 10;
+// Durée de scène visée par le lissage ; le nombre de cartes en découle côté
+// serveur, avec le fps de la source et le stride — la page ne fait que l'afficher.
+let SMOOTHING_SECONDS = 1 / 3;
 // Plafond d'images pour la banque, relu de /api/config : le serveur l'applique
 // de son côté, la page s'en sert pour tirer avant de zipper.
 let MAX_IMAGES = 20000;
@@ -432,9 +434,13 @@ function apply(s) {
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
   const active = (s.live || {}).smoothing === "max";
+  // Le nombre de cartes vient de l'état : il suit le stride et le fps de la
+  // source, donc l'annoncer de mémoire côté page serait faux dès le premier
+  // changement de stride.
+  const cartes = s.smoothing_frames || 1;
   $("meta").textContent = s.running
     ? `${s.device || "…"} · ${s.fps.toFixed(1)} fps · ${s.infer_ms.toFixed(0)} ms/inf · ` +
-      `${s.frames} frames · lissage ${active ? "maximum " + SMOOTHING_FRAMES : "aucun"}`
+      `${s.frames} frames · lissage ${active ? `maximum ${cartes} cartes` : "aucun"}`
     : "";
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
@@ -494,8 +500,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
   $("maximages").textContent = MAX_IMAGES;
-  SMOOTHING_FRAMES = cfg.smoothing_frames ?? SMOOTHING_FRAMES;
-  $("smoothwin").textContent = SMOOTHING_FRAMES;
+  SMOOTHING_SECONDS = cfg.smoothing_seconds ?? SMOOTHING_SECONDS;
+  $("smoothwin").textContent = SMOOTHING_SECONDS.toFixed(1).replace(".", ",");
 
   fillBanks(cfg.banks);
 

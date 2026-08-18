@@ -37,8 +37,27 @@ HEATMAP_VMAX = 10.0
 HEATMAP_ALPHA = 0.5
 
 # Profondeur des agrégations optionnelles, en frames scorées.
-SMOOTHING_FRAMES = 10
+# Le lissage se raisonne en temps de scène, pas en nombre de cartes : à stride 3
+# une carte sur trois est produite, donc dix cartes couvrent trois fois plus de
+# vidéo qu'à stride 1. On vise donc une durée fixe et on en déduit le nombre.
+SMOOTHING_SECONDS = 1 / 3
+SMOOTHING_FRAMES_MAX = 30   # borne mémoire : une carte 224x224 float32 = 200 Ko
+DEFAULT_FPS = 30.0          # sources qui ne déclarent rien, webcams surtout
 SMOOTHING_MODES = ("none", "mean", "max")
+
+
+def calculer_nb_heatmaps(fps, stride):
+    """Combien de cartes agréger pour couvrir SMOOTHING_SECONDS de scène.
+
+    Une carte tombe toutes les `stride` frames, soit toutes les stride/fps
+    secondes : n = fps * SMOOTHING_SECONDS / stride. À 30 fps, ça fait 10 cartes
+    en stride 1 et 3 en stride 3 — la même tranche de vidéo dans les deux cas,
+    alors qu'un nombre fixe la triplerait.
+    """
+    if not fps or fps <= 0 or fps > 240:
+        fps = DEFAULT_FPS   # 0 ou aberrant : CAP_PROP_FPS n'est pas fiable partout
+    n = round(fps * SMOOTHING_SECONDS / max(1, int(stride)))
+    return min(max(int(n), 1), SMOOTHING_FRAMES_MAX)
 
 # Racine des instantanés ; le sous-dossier vient de --bank_dir.
 SNAPSHOT_ROOT = "results"
@@ -145,8 +164,8 @@ def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
                    "Sert à approcher le cadrage serré d'une banque de visages.")
 @click.option("--smoothing", type=click.Choice(SMOOTHING_MODES), default="none",
               show_default=True,
-              help="Agrège score et heatmap sur les {} dernières frames scorées, "
-                   "comme les cases de l'interface web.".format(SMOOTHING_FRAMES))
+              help="Agrège score et heatmap sur ~{:.1f} s de vidéo, comme la case "
+                   "de l'interface web.".format(SMOOTHING_SECONDS))
 @click.option("--flip/--no-flip", default=True, show_default=True,
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
 @click.option("--loop/--no-loop", default=False, show_default=True,
@@ -182,9 +201,10 @@ def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
         snapshot_dir,
     )
 
-    scores = deque(maxlen=SMOOTHING_FRAMES)
+    window = calculer_nb_heatmaps(capture.get(cv2.CAP_PROP_FPS), stride)
+    scores = deque(maxlen=window)
     # Cartes scorées récentes ; l'agrégat n'est recalculé qu'à l'inférence.
-    heatmaps = deque(maxlen=SMOOTHING_FRAMES)
+    heatmaps = deque(maxlen=window)
     heatmap = np.zeros((fit_config["imagesize"], fit_config["imagesize"]), np.float32)
     score = float("nan")
     infer_ms = 0.0

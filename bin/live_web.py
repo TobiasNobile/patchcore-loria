@@ -34,9 +34,10 @@ from live_camera import (  # isort: skip
     FAISS_NUM_WORKERS,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
-    SMOOTHING_FRAMES,
     SMOOTHING_MODES,
+    SMOOTHING_SECONDS,
     aggregate,
+    calculer_nb_heatmaps,
     build_transform,
     preprocess,
     resolve_device,
@@ -183,6 +184,8 @@ class Runner:
             "params": None,
             "device": None,
             "device_note": None,
+            # Nombre de cartes agrégées, déduit du fps de la source et du stride.
+            "smoothing_frames": 0,
         }
         # Avancement du fit. `total` nul = phase sans compteur (le coreset).
         self._fit = {
@@ -449,12 +452,17 @@ class Runner:
                     "Confidentialité et sécurité > Caméra.".format(source)
                 )
 
-            scores = deque(maxlen=SMOOTHING_FRAMES)
+            # Le fps déclaré par la source, pas celui du traitement : la fenêtre
+            # de lissage se compte en temps de la scène filmée.
+            source_fps = capture.get(cv2.CAP_PROP_FPS)
+            window = calculer_nb_heatmaps(source_fps, self.state()["live"]["stride"])
+            scores = deque(maxlen=window)
             heatmap = np.zeros(
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
             )
             # Cartes scorées récentes et leur agrégat, recalculé à l'inférence seulement.
-            heatmaps = deque(maxlen=SMOOTHING_FRAMES)
+            heatmaps = deque(maxlen=window)
+            self._update(smoothing_frames=window)
             smoothed = heatmap
             smoothed_mode = "none"
             frame_index = 0
@@ -479,6 +487,14 @@ class Runner:
                     alpha = self._live["alpha"]
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
+                # deque(iterable, maxlen) garde les derniers éléments : le lissage
+                # se resserre ou s'élargit sans repartir de zéro.
+                want = calculer_nb_heatmaps(source_fps, stride)
+                if want != scores.maxlen:
+                    scores = deque(scores, maxlen=want)
+                    heatmaps = deque(heatmaps, maxlen=want)
+                    self._update(smoothing_frames=want)
+
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
@@ -591,7 +607,7 @@ class Handler(BaseHTTPRequestHandler):
                 "default_layers": list(FIT_DEFAULT_LAYERS),
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
                 "max_images": FIT_MAX_IMAGES,
-                "smoothing_frames": SMOOTHING_FRAMES,
+                "smoothing_seconds": SMOOTHING_SECONDS,
                 "banks": find_banks(),
             })
         elif self.path == "/api/banks":

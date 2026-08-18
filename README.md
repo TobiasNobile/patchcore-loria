@@ -173,7 +173,7 @@ captures. Aucune ne touche aux scores.
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
 | `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `SMOOTHING_FRAMES` = 10 | profondeur de l'agrégation par `maximum` que propose la case « Lissage » de la page (`bin/live_camera.py` offre aussi la moyenne, en ligne de commande) |
+| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage ». Le nombre de cartes agrégées en découle, via `calculer_nb_heatmaps(fps, stride)` de `bin/live_camera.py` : à 30 fps, 10 cartes en stride 1 et 3 en stride 3 — un nombre fixe couvrirait trois fois plus de scène au second qu'au premier |
 
 L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
