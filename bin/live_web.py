@@ -36,6 +36,7 @@ from live_camera import (  # isort: skip
     HEATMAP_VMIN,
     SMOOTHING_MODES,
     SMOOTHING_SECONDS,
+    SMOOTHING_SECONDS_MAX,
     aggregate,
     calculer_nb_heatmaps,
     build_transform,
@@ -110,6 +111,11 @@ OPACITY_MAX = 0.9
 # rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
 ZOOM_MAX = 8.0
 
+# Rattrapage borné : après une longue pause (onglet en arrière-plan, machine qui
+# a ramé), rejouer d'un coup toutes les frames en retard reviendrait à sauter la
+# scène entière. On reprend le fil, quitte à décaler l'horloge.
+MAX_SKIP_FRAMES = 60
+
 
 def clamp_alpha(value):
     """Un exposant négatif inverserait la rampe et sortirait l'alpha de [0, 1]."""
@@ -119,6 +125,11 @@ def clamp_alpha(value):
 def clamp_zoom(value):
     """Sous 1 le recadrage n'a pas de sens, au-delà de ZOOM_MAX on n'y voit rien."""
     return min(max(float(value), 1.0), ZOOM_MAX)
+
+
+def clamp_seconds(value):
+    """Durée de lissage : sous 0 elle n'a pas de sens, au-delà la tache se fige."""
+    return min(max(float(value), 0.0), SMOOTHING_SECONDS_MAX)
 
 
 def clean_dataset(name):
@@ -214,6 +225,7 @@ class Runner:
         self._live = {
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
             "alpha": HEATMAP_ALPHA, "stride": 1, "smoothing": "none",
+            "smoothing_seconds": SMOOTHING_SECONDS,
         }
 
     def state(self):
@@ -237,6 +249,9 @@ class Runner:
                 self._live["stride"] = max(1, int(fields["stride"]))
             if fields.get("smoothing") in SMOOTHING_MODES:
                 self._live["smoothing"] = fields["smoothing"]
+            if fields.get("smoothing_seconds") is not None:
+                self._live["smoothing_seconds"] = clamp_seconds(
+                    fields["smoothing_seconds"])
 
     def snapshot(self):
         """Enregistre l'overlay affiché sous results/<tache>/captures/…
@@ -303,6 +318,8 @@ class Runner:
                 "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
                 "stride": max(1, int(params.get("stride", 1))),
                 "smoothing": params.get("smoothing", "none"),
+                "smoothing_seconds": clamp_seconds(
+                    params.get("smoothing_seconds", SMOOTHING_SECONDS)),
             }
         self._wake.set()
         return True, None
@@ -473,7 +490,21 @@ class Runner:
             # Le fps déclaré par la source, pas celui du traitement : la fenêtre
             # de lissage se compte en temps de la scène filmée.
             source_fps = capture.get(cv2.CAP_PROP_FPS)
-            window = calculer_nb_heatmaps(source_fps, self.state()["live"]["stride"])
+            # Un fichier ne se cadence pas tout seul : sans horloge, il défile à
+            # la vitesse du traitement — au ralenti quand le stride est bas,
+            # en accéléré quand il est haut. Deux lissages ne sont alors plus
+            # comparables, puisque le temps lui-même change avec les réglages.
+            # Une caméra, elle, impose déjà son rythme.
+            paced = not source.isdigit() and 1.0 <= source_fps <= 240.0
+            clock = time.perf_counter()   # origine de l'horloge de lecture
+            consumed = 0                  # frames prises à la source depuis clock
+            scored_at = 0                 # `consumed` à la dernière inférence
+            # Stride effectif : frames de source par inférence, sauts compris.
+            # C'est lui, pas le stride demandé, qui donne l'espacement réel des
+            # cartes — donc la durée que couvre la fenêtre de lissage.
+            effective_stride = float(self.state()["live"]["stride"])
+            window = calculer_nb_heatmaps(
+                source_fps, effective_stride, self.state()["live"]["smoothing_seconds"])
             scores = deque(maxlen=window)
             heatmap = np.zeros(
                 (fit_config["imagesize"], fit_config["imagesize"]), np.float32
@@ -489,10 +520,29 @@ class Runner:
             last_tick = time.perf_counter()
 
             while not self._stop.is_set():
+                if paced:
+                    # En avance : on attend l'heure de la frame suivante. En
+                    # retard : on saute les frames dues avec grab(), qui les
+                    # avance sans les décoder. Dans les deux cas la scène défile
+                    # à sa vitesse, et c'est le nombre d'inférences qui varie.
+                    due = clock + consumed / source_fps
+                    ahead = due - time.perf_counter()
+                    if ahead > 0:
+                        self._stop.wait(min(ahead, 0.25))
+                    else:
+                        for _ in range(min(int(-ahead * source_fps), MAX_SKIP_FRAMES)):
+                            if not capture.grab():
+                                break
+                            consumed += 1
+
                 ok, frame = capture.read()
+                consumed += 1
                 if not ok:
                     if params["loop"] and not source.isdigit():
                         capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        # L'horloge repart avec la vidéo, sinon le rattrapage
+                        # sauterait aussitôt tout ce qui vient d'être rembobiné.
+                        clock, consumed, scored_at = time.perf_counter(), 0, 0
                         continue
                     self._update(error="Fin du flux.")
                     break
@@ -505,9 +555,11 @@ class Runner:
                     alpha = self._live["alpha"]
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
+                    seconds = self._live["smoothing_seconds"]
                 # deque(iterable, maxlen) garde les derniers éléments : le lissage
                 # se resserre ou s'élargit sans repartir de zéro.
-                want = calculer_nb_heatmaps(source_fps, stride)
+                want = calculer_nb_heatmaps(
+                    source_fps, max(stride, effective_stride), seconds)
                 if want != scores.maxlen:
                     scores = deque(scores, maxlen=want)
                     heatmaps = deque(heatmaps, maxlen=want)
@@ -516,6 +568,13 @@ class Runner:
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
+                    # Frames de source réellement consommées depuis la dernière
+                    # inférence : c'est l'espacement des cartes. Lissé, sinon un
+                    # saut isolé ferait osciller la fenêtre.
+                    if scored_at:
+                        effective_stride = (0.7 * effective_stride
+                                            + 0.3 * (consumed - scored_at))
+                    scored_at = consumed
                     t0 = time.perf_counter()
                     batch_scores, batch_masks = patchcore_instance.predict(tensor)
                     infer_ms = 1000.0 * (time.perf_counter() - t0)
@@ -627,6 +686,7 @@ class Handler(BaseHTTPRequestHandler):
                 "default_coreset_pct": FIT_DEFAULT_CORESET_PCT,
                 "max_images": FIT_MAX_IMAGES,
                 "smoothing_seconds": SMOOTHING_SECONDS,
+                "smoothing_seconds_max": SMOOTHING_SECONDS_MAX,
                 "banks": banks,
                 "default_bank": default_bank_dir(banks),
             })
@@ -817,6 +877,8 @@ class Handler(BaseHTTPRequestHandler):
                     "smoothing": (params.get("smoothing")
                                   if params.get("smoothing") in SMOOTHING_MODES
                                   else "none"),
+                    "smoothing_seconds": clamp_seconds(
+                        params.get("smoothing_seconds") or SMOOTHING_SECONDS),
                     "loop": bool(params.get("loop")),
                     "device": str(params.get("device") or "auto"),
                     "faiss_threads": max(1, int(params.get("faiss_threads") or FAISS_NUM_WORKERS)),

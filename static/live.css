@@ -99,6 +99,10 @@ label.check input { width: auto; margin-top: 2px; flex: none; }
 .formats code { font-size: 10px; background: var(--panel);
                 border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
 
+/* Champ posé dans une phrase : largeur au contenu, pas les 100 % des autres. */
+#smoothwin { width: 4.2em; display: inline; padding: 1px 4px; font-size: 11px;
+             vertical-align: baseline; }
+
 /* Deux champs courts côte à côte : une ligne de moins à faire tenir à l'écran. */
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px;
         margin-bottom: 9px; }
@@ -198,5 +202,5 @@ button:disabled { opacity: .35; cursor: default; }
   #fitstatus, #fiterror, #error, #meta, #capture { min-height: 14px; }
   #bankname { font-size: 16px; }
   /* Le carré rend la place qu'il faut au score et aux réglages sous lui. */
-  #camframe { width: min(100%, 39vh, 420px); }
+  #camframe { width: min(100%, 36vh, 420px); }
 }

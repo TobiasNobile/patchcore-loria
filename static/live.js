@@ -65,6 +65,7 @@ function readParams() {
     vmax: parseFloat($("vmax").value || "10"),
     alpha: alphaExp(),
     smoothing: smoothingMode(),
+    smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
     loop: $("loop").checked,
     device: $("device").value,
     faiss_threads: parseInt($("faiss_threads").value || "1", 10),
@@ -388,6 +389,8 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
   $(id).addEventListener("input", () =>
     post("/api/update", { [id]: parseFloat($(id).value) }));
 });
+$("smoothwin").addEventListener("input", () =>
+  post("/api/update", { smoothing_seconds: parseFloat($("smoothwin").value || "0.3") }));
 $("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
 
 // Une seule case, donc un seul mode : le maximum. La moyenne stabilisait mais
@@ -520,7 +523,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   $("train_subset").max = MAX_IMAGES;
   $("maximages").textContent = MAX_IMAGES;
   SMOOTHING_SECONDS = cfg.smoothing_seconds ?? SMOOTHING_SECONDS;
-  $("smoothwin").textContent = SMOOTHING_SECONDS.toFixed(1).replace(".", ",");
+  $("smoothwin").value = SMOOTHING_SECONDS.toFixed(1);
+  if (cfg.smoothing_seconds_max) $("smoothwin").max = cfg.smoothing_seconds_max;
 
   fillBanks(cfg.banks, cfg.default_bank);
 

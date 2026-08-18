@@ -42,21 +42,26 @@ HEATMAP_ALPHA = 0.5
 # vidéo qu'à stride 1. On vise donc une durée fixe et on en déduit le nombre.
 SMOOTHING_SECONDS = 1 / 3
 SMOOTHING_FRAMES_MAX = 30   # borne mémoire : une carte 224x224 float32 = 200 Ko
+SMOOTHING_SECONDS_MAX = 5.0 # au-delà la tache survit si longtemps qu'on la croit figée
 DEFAULT_FPS = 30.0          # sources qui ne déclarent rien, webcams surtout
 SMOOTHING_MODES = ("none", "mean", "max")
 
 
-def calculer_nb_heatmaps(fps, stride):
-    """Combien de cartes agréger pour couvrir SMOOTHING_SECONDS de scène.
+def calculer_nb_heatmaps(fps, stride, seconds=SMOOTHING_SECONDS):
+    """Combien de cartes agréger pour couvrir `seconds` de scène.
 
     Une carte tombe toutes les `stride` frames, soit toutes les stride/fps
-    secondes : n = fps * SMOOTHING_SECONDS / stride. À 30 fps, ça fait 10 cartes
+    secondes : n = fps * seconds / stride. À 30 fps et 1/3 s, ça fait 10 cartes
     en stride 1 et 3 en stride 3 — la même tranche de vidéo dans les deux cas,
     alors qu'un nombre fixe la triplerait.
+
+    `stride` est le stride *effectif* côté web : quand l'inférence ne suit pas,
+    des frames sont sautées pour tenir le temps réel, et l'espacement des cartes
+    est plus large que le stride demandé.
     """
     if not fps or fps <= 0 or fps > 240:
         fps = DEFAULT_FPS   # 0 ou aberrant : CAP_PROP_FPS n'est pas fiable partout
-    n = round(fps * SMOOTHING_SECONDS / max(1, int(stride)))
+    n = round(fps * max(float(seconds), 0.0) / max(1.0, float(stride)))
     return min(max(int(n), 1), SMOOTHING_FRAMES_MAX)
 
 # Racine des instantanés ; le sous-dossier vient de --bank_dir.

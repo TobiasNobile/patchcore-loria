@@ -60,6 +60,13 @@ détecter, et « Fitter ». **À droite**, on choisit une banque et on score la 
 Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
 endroit où torch est sûr sur macOS.
 
+Un fichier vidéo est lu **à sa vitesse réelle** : la boucle se cale sur l'horloge
+de la source, attend si elle est en avance et saute des frames si elle est en
+retard. Sans ça le clip défilerait au rythme du traitement — au ralenti à stride
+bas, en accéléré à stride haut — et deux réglages de lissage ne seraient plus
+comparables. Le prix est visible dans la page : à stride 1 sur un clip 60 fps,
+seule une frame sur dix environ est scorée si l'inférence prend 170 ms.
+
 ### Les banques : `coresets/*.pkg`
 
 Une banque tient dans un fichier, et son nom dit sa configuration :
@@ -173,7 +180,7 @@ captures. Aucune ne touche aux scores.
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
 | `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage ». Le nombre de cartes agrégées en découle, via `calculer_nb_heatmaps(fps, stride)` de `bin/live_camera.py` : à 30 fps, 10 cartes en stride 1 et 3 en stride 3 — un nombre fixe couvrirait trois fois plus de scène au second qu'au premier |
+| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `bin/live_camera.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
 
 L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,

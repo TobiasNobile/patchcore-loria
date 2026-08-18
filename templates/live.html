@@ -85,9 +85,13 @@
     <div id="stagecontrols">
       <label class="check">
         <input id="smooth_max" class="live" type="checkbox">
+        <!-- Le champ vit dans l'aide, à la place du nombre qu'il remplace : un
+             clic dessus ne coche pas la case, un navigateur ne transmet pas
+             l'activation d'un label à travers un contrôle imbriqué. -->
         <span>Lissage<small>heatmap et score agrégés par maximum sur
-          <b id="smoothwin">0,3</b> s de vidéo, quel que soit le
-          stride<span id="smoothnow"></span></small></span>
+          <input id="smoothwin" class="live" type="number" min="0.1" max="5"
+                 step="0.1" value="0.3"> s de
+          vidéo<span id="smoothnow"></span></small></span>
       </label>
 
       <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
