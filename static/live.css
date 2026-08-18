@@ -188,12 +188,12 @@ button:disabled { opacity: .35; cursor: default; }
    champ. */
 @media (max-height: 760px) {
   body { padding: 10px 14px; gap: 8px; }
-  .panel { padding: 10px; }
+  .panel { padding: 8px 10px; }
   .panel h2 { margin-bottom: 8px; }
   .panel h2.spaced { margin-top: 8px; padding-top: 6px; }
   label { margin-bottom: 2px; }
   .formats { margin-bottom: 6px; }
-  label + input, label + select, label + .slider, .pair, .checks { margin-bottom: 6px; }
+  label + input, label + select, label + .slider, .pair, .checks { margin-bottom: 5px; }
   label.check { margin-bottom: 6px; }
   label small { font-size: 10px; }
   input, select { padding: 4px 8px; }
@@ -201,6 +201,12 @@ button:disabled { opacity: .35; cursor: default; }
   .actions { margin-top: 8px; }
   #fitstatus, #fiterror, #error, #meta, #capture { min-height: 14px; }
   #bankname { font-size: 16px; }
+  /* Les puces passent sur deux lignes dès qu'il y en a dix : resserrées, elles
+     rendent au reste la hauteur que ce deuxième rang coûte. */
+  #bankbar { padding-bottom: 6px; }
+  #chips { gap: 4px; margin-top: 4px; }
+  .chip { padding: 1px 7px; font-size: 10px; }
+  .chip span { font-size: 9px; }
   /* Le carré rend la place qu'il faut au score et aux réglages sous lui. */
   #camframe { width: min(100%, 36vh, 420px); }
 }

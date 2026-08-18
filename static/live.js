@@ -95,6 +95,7 @@ function showBank(dir) {
     ["backbone", m.backbone],
     ["couches", m.layers],
     ["coreset", m.coreset],
+    ["nn", m.num_nn],
     ["image", m.imagesize ? m.imagesize + " px" : null],
     ["banque", m.bank_size ? num(m.bank_size) + " vect." : null],
     ["taille", m.bank_gb ? m.bank_gb.toFixed(2) + " Go" : null],

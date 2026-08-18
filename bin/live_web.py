@@ -182,6 +182,9 @@ def find_banks():
             "bank_gb": cfg.get("bank_gb", 0.0),
             "train_images": cfg.get("n_train_images"),
             "dataset": cfg.get("dataset"),
+            # Nombre de voisins cherchés au scoring : il vient de la banque, pas
+            # de la page, et change l'échelle des scores d'une banque à l'autre.
+            "num_nn": cfg.get("anomaly_scorer_num_nn"),
         })
     return banks
 
