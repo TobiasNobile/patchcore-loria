@@ -12,10 +12,18 @@ bin/
   celeba/  fit/memory_bank.py  infer/{heatmap,histogram}.py  fit_and_score.sh
   coco/    fit/memory_bank.py  infer/{heatmap,histogram}.py  fit_and_score.sh
            sweep_coreset.sh
+  scene/   fit/memory_bank.py  infer/histogram.py    # les mêmes, sur une scène filmée
+  capture.py                # intervallomètre webcam -> data/scene/normal
+  pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
 src/
   experiments/benchmarks.py       # les specs CELEBA et COCO
+  experiments/reports.py          # histogramme et heatmaps : relire une banque
+  experiments/metrics.py          # Jaccard, Wasserstein, test de Student
+  patchcore/metrics.py            # AUROC, amont
+  patchcore/tracking.py           # le run MLflow
   patchcore/datasets/celeba.py    # CelebA one-class (attribut Wearing_Hat)
   patchcore/datasets/coco.py      # COCO one-class (personne ± couteau)
+  patchcore/datasets/mvtec.py     # MVTec, le jeu de référence de l'amont
 tools/
   coco_fetch.py             # télécharge les seules images COCO nécessaires
   dataset_export.py         # zips « good » de MTD et mini-ShanghaiTech
@@ -29,6 +37,10 @@ remote_run.sh               # idem sur le DCE de CentraleSupélec Metz
 Les tests couvrent `sampler.py` et `patchcore.py`, les deux fichiers modifiés
 par rapport à l'amont : `test_coreset_sampling_on_same_samples` est ce qui
 soutient la ligne « sélection numériquement identique » du README.
+
+Le dépôt publiable, lui, ne garde que ce qui fait tourner la page : le fit
+(`experiments/pipelines.py`), le scoring live, et rien d'autre. Toute mesure —
+histogramme, heatmap, AUROC, MLflow — vit ici.
 
 Ces scripts installés :
 
