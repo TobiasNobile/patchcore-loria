@@ -4,21 +4,20 @@ Fork de [amazon-science/patchcore-inspection](https://github.com/amazon-science/
 l'implémentation de `PatchCore` (Roth et al., 2021, <https://arxiv.org/abs/2106.08265>).
 Code amont sous Apache 2.0, historique git conservé depuis le commit initial.
 
-**Retiré de l'amont** : les scripts MVTec (`bin/mvtec/`), les modèles pré-entraînés
-et les exemples `sample_*.sh`.
+**Retiré de l'amont** : les scripts MVTec (`bin/mvtec/`) et le dataset qui allait
+avec, les modèles pré-entraînés, les exemples `sample_*.sh`, et tout ce que plus
+rien n'appelait — `utils.py` se réduit à `fix_seeds`.
 
-**Modifié dans l'amont** — quatre fichiers, aucun ne change les résultats
+**Modifié dans l'amont** — deux fichiers, aucun ne change les résultats
 (`git diff upstream/main -- src/patchcore/` pour les relire) :
 
 | fichier | modification | pourquoi |
 | --- | --- | --- |
 | `sampler.py` | projection par blocs ; boucle du coreset réécrite sans matrice `(N, k)` ni recalcul des normes | le nuage non projeté de 20 000 images pèse 60 Go, plus que le GPU. Sélection **numériquement identique** : mêmes indices que l'amont à ancres égales |
 | `patchcore.py` | `_fill_memory_bank` préalloue le tableau final au lieu de `np.concatenate` | `concatenate` fait coexister la liste et son résultat, soit 120 Go pour 20 000 images |
-| `utils.py` | `set_torch_device` vérifie `cuda.is_available()` et retombe sur CPU en le signalant | l'amont renvoyait un device cuda inexistant et échouait plus loin, sans rapport apparent |
-| `datasets/mvtec.py` | ajoute `transform_mean` / `transform_std` | purement additif ; les heatmaps en ont besoin pour dénormaliser l'image |
 
-`common.py` est identique à l'amont. `banks.py`, `packaging.py`, `uploads.py`
-et `tracking.py` sont des ajouts.
+`common.py` est identique à l'amont. `banks.py`, `packaging.py` et `uploads.py`
+sont des ajouts.
 
 **Ajouté** : l'interface web `main.py` (construire une banque depuis un zip
 d'images, puis scorer la webcam), le format de banque `coresets/*.pkg`, les
