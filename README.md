@@ -134,6 +134,8 @@ bin/
   pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
 
 src/experiments/            # métriques et pipelines partagés par les datasets
+src/templates/live.html     # la page servie par live_web.py
+src/static/live.{css,js}    # sa feuille de style et son script
 models/<dataset>/<tag>/     # banques mémoire des scripts de fit (gitignoré)
 results/<tâche>/<sortie>/   # figures et mesures (gitignoré)
 ```

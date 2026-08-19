@@ -58,8 +58,11 @@ from experiments.pipelines import run_fit
 LOGGER = logging.getLogger(__name__)
 
 CORESETS_DIR = patchcore.packaging.CORESETS_DIR
-TEMPLATES_DIR = "templates"
-STATIC_DIR = "static"
+# Chemins absolus, déduits de l'emplacement du fichier : la page se sert
+# identiquement quel que soit le répertoire d'où le serveur a été lancé.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATES_DIR = os.path.join(_ROOT, "src", "templates")
+STATIC_DIR = os.path.join(_ROOT, "src", "static")
 
 # Backbones proposés au fit, du plus lourd au plus rapide.
 FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
