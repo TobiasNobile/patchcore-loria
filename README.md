@@ -101,11 +101,8 @@ publiée, hébergé à côté du dépôt et non dedans, que `git clone` ne rapat
 C'est ce que va chercher `bin/fetch_bank.sh`, somme de contrôle à l'appui. Une
 petite banque peut toujours être committée pour de bon avec `git add -f`.
 
-Une banque construite en ligne de commande s'y convertit sans refit :
-
-```shell
-python bin/pack_bank.py models/scene/wideresnet50_l3-l4_..._tsall_s0 --task PointStage
-```
+La page empaquette elle-même à la fin d'un fit : le `.pkg` apparaît dans
+`coresets/` et dans le sélecteur, sans rien à convertir à la main.
 
 ### Le zip d'images
 
@@ -123,6 +120,11 @@ sous-dossier `anomaly/` restant gardé entier. Pour une démo filmée sur place,
 centaines d'images du décor réel valent mieux que des milliers d'images
 génériques (cf. « Déploiement sur une scène réelle » plus bas).
 
+Un biais à connaître : le prétraitement est un `Resize` suivi d'un `CenterCrop`.
+Ce qui sort du centre du cadre n'est ni appris ni scoré — cadrer la scène en
+conséquence. `FIT_SEED` fixe le tirage de bout en bout, et apparaît dans le nom
+de la banque : un même réglage rejoué n'écrase pas le précédent.
+
 ## Organisation des scripts et des sorties
 
 Deux axes : le dataset, puis la phase. Le fit est la moitié coûteuse et hors-ligne
@@ -136,39 +138,18 @@ coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
 
 bin/
   fetch_bank.sh             # installe la banque de démonstration (release)
-  capture.py                # filme la scène de déploiement -> data/scene/
-  scene/   fit/memory_bank.py  infer/histogram.py
-  live_camera.py            # fenêtre OpenCV      | agnostiques : le dataset
   live_web.py               # l'app servie par main.py
+  live_camera.py            # fenêtre OpenCV, même scoring sans le navigateur
   bench_live.py             # coût d'une frame, étape par étape
-  pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
 
-src/experiments/            # métriques et pipelines partagés par les datasets
+src/patchcore/              # le cœur : backbone, coreset, banque, scoring
+src/experiments/            # le fit, du Spec au .pkg
 src/templates/live.html     # la page servie par live_web.py
 src/static/live.{css,js}    # sa feuille de style et son script
-models/<dataset>/<tag>/     # banques mémoire des scripts de fit (gitignoré)
-results/<tâche>/<sortie>/   # figures et mesures (gitignoré)
 ```
 
 Les scripts live déduisent de la banque où écrire leurs captures
 (`results/<tâche>/captures/<couche>/<coreset>/v<vmax>/`).
-
-## Reproductibilité et seeds
-
-`FIT_SEED` fixe le tirage de bout en bout : sous-ensemble d'images
-d'entraînement, initialisation de la projection du coreset, échantillon de test
-équilibré. Deux seeds donnent donc deux banques et deux mesures indépendantes.
-Il apparaît dans le nom du dossier de banque et dans celui du `.pkg`, si bien
-qu'un même réglage rejoué n'écrase pas le précédent.
-
-Chaque figure est doublée d'un sidecar JSON portant la configuration et les
-métriques : c'est lui la source de vérité, la figure n'en est que la lecture.
-Les balayages de seeds et leur agrégation vivent dans la version complète.
-
-**Deux biais de protocole à connaître.** Le prétraitement est un `Resize` suivi
-d'un `CenterCrop` : les défauts hors du centre sont invisibles et les faux
-positifs artificiellement réduits. Et il n'existe pas de split de validation —
-seuils et échelles de couleur sont choisis en regardant le test.
 
 ## Rendu de la heatmap
 
@@ -223,18 +204,15 @@ GPU (NVIDIA L40S, `INFER_FAISS_GPU=1`) :
 
 Une banque construite sur un dataset public score surtout la nouveauté de scène,
 et non l'anomalie cherchée. Sur un robot qui filme toujours le même
-environnement, fitter sur *cette* scène :
+environnement, fitter sur *cette* scène : filmer le décor sans l'anomalie à
+détecter, sous toutes ses variations, puis envoyer les images dans la moitié
+gauche de la page — un dossier `normal/`, et un `anomaly/` si l'on veut de quoi
+calibrer un seuil. Tout ce qui n'est pas dans la banque sera scoré comme
+anormal, le décor compris s'il a changé.
 
-```shell
-python bin/capture.py --out data/scene/normal  --count 400 --every 0.5
-python bin/capture.py --out data/scene/anomaly --count 60     # pour le seuil
-SCENE_PATH=data/scene python bin/scene/fit/memory_bank.py
-SCENE_PATH=data/scene python bin/scene/infer/histogram.py     # seuil à lire entre les modes
-python bin/live_web.py                                        # puis choisir la banque
-```
-
-Filmer la scène sans l'anomalie à détecter, sous toutes ses variations : tout ce
-qui n'est pas dans la banque sera scoré comme anormal.
+Quelques centaines d'images espacées valent mieux que des milliers de frames
+consécutives : à 30 images par seconde, deux voisines n'apprennent rien de neuf
+à la banque.
 
 ## Security
 
