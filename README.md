@@ -57,8 +57,13 @@ If you use the code in this repository, please cite
 ## Démarrage rapide
 
 ```shell
+bash bin/fetch_bank.sh    # la banque de démonstration, 153 Mo, hors du dépôt
 python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
+
+Le premier script est facultatif : sans lui la page s'ouvre quand même, mais il
+faut fitter une banque avant de pouvoir scorer quoi que ce soit. Avec, la banque
+« personne + couteau » est présélectionnée à l'ouverture.
 
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
@@ -89,8 +94,13 @@ Le fichier de config reste la référence : le nom n'en est qu'un résumé, lisi
 sans ouvrir l'archive. À côté du `.pkg`, un dossier de même nom garde les images
 qui ont servi — de quoi refitter autrement sans les renvoyer.
 
-Les deux sont gitignorés : un `.pkg` pèse de 80 Mo à 750 Mo, à distribuer en
-release plutôt qu'à committer (`git add -f` pour forcer une banque de démo).
+Les deux sont gitignorés. Un `.pkg` pèse de 80 Mo à 3 Go, quand GitHub refuse
+au push tout fichier au-delà de 100 Mio — et un blob de cette taille resterait
+dans l'historique de chaque clone même après suppression. Les banques se
+distribuent donc en **asset de release** : un fichier attaché à une version
+publiée, hébergé à côté du dépôt et non dedans, que `git clone` ne rapatrie pas.
+C'est ce que va chercher `bin/fetch_bank.sh`, somme de contrôle à l'appui. Une
+petite banque peut toujours être committée pour de bon avec `git add -f`.
 
 Une banque construite en ligne de commande s'y convertit sans refit :
 
@@ -126,6 +136,7 @@ coresets/<nom>.pkg          # banques empaquetées (gitignoré)
 coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
 
 bin/
+  fetch_bank.sh             # installe la banque de démonstration (release)
   capture.py                # filme la scène de déploiement -> data/scene/
   scene/   fit/memory_bank.py  infer/histogram.py
   live_camera.py            # fenêtre OpenCV      | agnostiques : le dataset

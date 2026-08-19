@@ -20,9 +20,9 @@ data/
 models/celeba/
 models/coco/
 
-# Banques empaquetées et images de fit. Un .pkg pèse de 80 Mo à 750 Mo, au-delà
-# ou près de la limite de 100 Mo par fichier de GitHub : à distribuer en release
-# plutôt qu'à committer. Pour livrer quand même une banque de démonstration :
-# git add -f coresets/<nom>.pkg
+# Banques empaquetées et images de fit. Un .pkg pèse de 80 Mo à 3 Go, quand
+# GitHub refuse au push tout fichier au-delà de 100 Mio : les banques se
+# distribuent en asset de release, que bin/fetch_bank.sh vient chercher. Une
+# petite banque peut être committée pour de bon : git add -f coresets/<nom>.pkg
 coresets/*.pkg
 coresets/*/
