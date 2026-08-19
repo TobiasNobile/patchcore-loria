@@ -46,6 +46,21 @@ SMOOTHING_SECONDS_MAX = 5.0 # au-delà la tache survit si longtemps qu'on la cro
 DEFAULT_FPS = 30.0          # sources qui ne déclarent rien, webcams surtout
 SMOOTHING_MODES = ("none", "mean", "max")
 
+# Unité du score. « none » garde la distance brute, dont l'ordre de grandeur
+# dépend de la couche extraite ; « banque » la ramène en écarts robustes mesurés
+# au fit ; « fenetre » réestime ces écarts en continu sur la vidéo.
+NORM_MODES = ("none", "banque", "fenetre")
+
+# Durée sur laquelle la fenêtre réestime l'échelle. Sans rapport avec la fenêtre
+# de lissage (~1/3 s) : celle-ci stabilise l'affichage, celle-là estime une
+# distribution nominale. Les confondre donnerait une échelle qui suit l'anomalie
+# au lieu de la faire ressortir.
+CALIB_SECONDS = 20.0
+
+# En deçà, la fenêtre n'a pas de quoi estimer quoi que ce soit : on garde
+# l'échelle du fit le temps qu'elle se remplisse.
+CALIB_MIN_FRAMES = 5
+
 
 def calculer_nb_heatmaps(fps, stride, seconds=SMOOTHING_SECONDS):
     """Combien de cartes agréger pour couvrir `seconds` de scène.
@@ -70,6 +85,66 @@ SNAPSHOT_ROOT = "results"
 FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
 # Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault.
 FAISS_NUM_WORKERS = int(os.environ.get("INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
+
+
+def stats_carte(carte):
+    """Position et dispersion robustes d'une carte de scores.
+
+    Médiane et MAD, pas moyenne et écart-type : point de rupture de 50 %, donc
+    une anomalie occupant jusqu'à la moitié du champ ne déplace pas l'échelle.
+    Le facteur 1,4826 ramène le MAD à un écart-type gaussien — c'est une unité
+    de mesure, pas une hypothèse sur la forme de la distribution.
+    """
+    mediane = float(np.median(carte))
+    mad = float(np.median(np.abs(carte - mediane)))
+    return mediane, 1.4826 * mad
+
+
+class Echelle:
+    """L'unité dans laquelle lire un score de patch.
+
+    Le score est une distance à la banque : sans unité, et d'un ordre de grandeur
+    qui change avec la couche extraite et la scène filmée. Cette classe fournit
+    le couple (médiane, sigma) qui le rend sans dimension, depuis deux sources :
+    ce que le fit a mesuré sur le holdout, ou ce que les dernières secondes de
+    vidéo montrent — la seconde suit la dérive, la première non.
+    """
+
+    def __init__(self, fit_config, fenetre):
+        patch = ((fit_config.get("nominal_scores") or {}).get("patch") or {})
+        self.fit = ((patch["median"], patch["sigma"])
+                    if patch.get("sigma", 0) > 0 else None)
+        self.recentes = deque(maxlen=max(1, fenetre))
+
+    def redimensionner(self, fenetre):
+        if fenetre != self.recentes.maxlen:
+            self.recentes = deque(self.recentes, maxlen=max(1, fenetre))
+
+    def observer(self, carte):
+        """Enregistre les statistiques de la carte et les renvoie."""
+        mediane, sigma = stats_carte(carte)
+        self.recentes.append((mediane, sigma))
+        return mediane, sigma
+
+    def courante(self, mode):
+        """(médiane, sigma) à appliquer, ou None si l'échelle reste absolue."""
+        if mode == "fenetre" and len(self.recentes) >= CALIB_MIN_FRAMES:
+            # Médiane des médianes et des dispersions : une frame aberrante ne
+            # déplace pas l'échelle, alors qu'une moyenne s'y laisserait tirer.
+            medianes = [m for m, _ in self.recentes]
+            sigmas = [s for _, s in self.recentes]
+            return float(np.median(medianes)), float(np.median(sigmas))
+        if mode in ("banque", "fenetre"):
+            return self.fit
+        return None
+
+
+def normaliser(carte, echelle):
+    """Ramène une carte de scores en écarts robustes. `echelle` None = inchangée."""
+    if echelle is None:
+        return carte
+    mediane, sigma = echelle
+    return (carte - mediane) / max(sigma, 1e-6)
 
 
 def aggregate(values, mode):
