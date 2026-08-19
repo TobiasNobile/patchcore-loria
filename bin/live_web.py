@@ -167,6 +167,24 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
+def _echelle_calibree(cfg):
+    """Ce que le fit a mesuré des scores nominaux, s'il l'a mesuré.
+
+    Les banques d'avant cette mesure n'ont rien : la page retombe alors sur ses
+    ordres de grandeur codés en dur, qui dépendent de la couche extraite.
+    """
+    calib = cfg.get("nominal_scores") or {}
+    patch = calib.get("patch") or {}
+    if not patch:
+        return {}
+    return {
+        "vmax_calibre": round(patch["q999"], 2),
+        "calib_images": calib.get("n_images"),
+        "calib_median": round(patch["median"], 3),
+        "calib_sigma": round(patch["sigma"], 3),
+    }
+
+
 def find_banks():
     """Les .pkg de coresets/. Seul le fit_config est lu : l'index pèse jusqu'au Go."""
     banks = []
@@ -191,6 +209,11 @@ def find_banks():
             # Nombre de voisins cherchés au scoring : il vient de la banque, pas
             # de la page, et change l'échelle des scores d'une banque à l'autre.
             "num_nn": cfg.get("anomaly_scorer_num_nn"),
+            # Échelle mesurée sur le holdout au fit, quand la banque en porte
+            # une : le q999 des scores nominaux, soit la borne sous laquelle
+            # tombent 999 patchs normaux sur 1000. Au-delà, la rampe sature —
+            # ce qui est le comportement voulu pour ce qui n'est pas nominal.
+            **_echelle_calibree(cfg),
         })
     return banks
 

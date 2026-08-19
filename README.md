@@ -166,6 +166,16 @@ L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, c
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
 pas un voile bleu.
 
+**L'échelle, elle, se mesure.** Le score est une distance à la banque : il n'a
+pas d'unité, et sa valeur change d'un facteur 25 entre `layer3` et `layer4`. Le
+fit score donc le holdout — les 20 % d'images normales délibérément écartées de
+la banque, seules images nominales que la banque n'a jamais vues — et enregistre
+dans `fit_config.json` la médiane, le MAD et les quantiles des scores obtenus.
+La page propose alors le q999 comme borne haute : 999 patchs normaux sur 1000
+tombent en dessous, ce qui saturera au-dessus n'est plus nominal. Les banques
+construites avant cette mesure retombent sur les ordres de grandeur par couche,
+qui restent des devinettes.
+
 ## Cadence live — coût d'une frame (`bin/bench_live.py`)
 
 Banque « personne + couteau » (COCO, layer3 + layer4, 20 000 images de fit —

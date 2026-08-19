@@ -164,6 +164,84 @@ def _subset_indices(n_total, n_wanted, seed, random_subset):
     return sorted(rng.choice(n_total, n_wanted, replace=False).tolist())
 
 
+# Plafond d'images du holdout scorées pour calibrer l'échelle. Au-delà, les
+# quantiles ne bougent plus et la passe coûte pour rien.
+CALIB_IMAGES = 200
+
+
+def _stats_scores(valeurs):
+    """Position et dispersion robustes, plus la queue haute.
+
+    Médiane et MAD plutôt que moyenne et écart-type : point de rupture de 50 %,
+    donc une anomalie dans le champ ne déplace pas l'échelle. Le facteur 1,4826
+    ramène le MAD à un écart-type pour une gaussienne — c'est une unité, pas une
+    hypothèse de normalité, la distribution des scores étant très dissymétrique.
+    """
+    mediane = float(np.median(valeurs))
+    mad = float(np.median(np.abs(valeurs - mediane)))
+    q90, q99, q999 = (float(q) for q in np.quantile(valeurs, [0.9, 0.99, 0.999]))
+    return {
+        "median": mediane, "mad": mad, "sigma": 1.4826 * mad,
+        "q90": q90, "q99": q99, "q999": q999,
+        "min": float(valeurs.min()), "max": float(valeurs.max()),
+        "n": int(valeurs.size),
+    }
+
+
+def nominal_scores(instance, spec, cfg, seed, device, extra_config, num_workers):
+    """Ce que la banque score sur du nominal qu'elle n'a jamais vu.
+
+    La banque dit ce qui est nominal dans l'espace des features ; elle ne dit pas
+    quelle *distance* est normale. Cette échelle-là ne s'obtient qu'en repassant
+    des images nominales à travers elle — et pas n'importe lesquelles : une image
+    présente dans la banque est son propre plus proche voisin et score presque
+    zéro. D'où le holdout, ces 20 % d'images normales délibérément écartées du
+    fit (cf. experiments/folder.py), seul échantillon non biaisé disponible.
+
+    Renvoie None si le dataset n'expose pas de nominal hors banque : l'échelle
+    reste alors absolue, comme avant.
+    """
+    plafond = int(os.environ.get("FIT_CALIB_IMAGES", CALIB_IMAGES))
+    if plafond <= 0:
+        return None
+    try:
+        dataset = spec.build(
+            split="test", resize=cfg["resize"], imagesize=cfg["imagesize"],
+            seed=seed, fit_config={**(extra_config or {}), **cfg},
+        )
+        labels = np.asarray(dataset.labels, dtype=int)
+    except Exception as exc:  # noqa: BLE001 - calibrer ne doit jamais tuer un fit
+        LOGGER.warning("Holdout inaccessible (%s) : échelle non calibrée.", exc)
+        return None
+
+    nominal = np.where(labels == 0)[0]
+    if nominal.size == 0:
+        LOGGER.warning("Aucune image nominale hors banque : échelle non calibrée.")
+        return None
+    if nominal.size > plafond:
+        nominal = np.random.RandomState(seed).choice(nominal, plafond, replace=False)
+
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.Subset(dataset, sorted(nominal.tolist())),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+    )
+    scores, cartes, _, _ = instance.predict(loader)
+    patchs = np.concatenate([np.asarray(c, dtype=np.float32).ravel() for c in cartes])
+    stats = {
+        "n_images": len(scores),
+        "patch": _stats_scores(patchs),
+        "image": _stats_scores(np.asarray(scores, dtype=np.float32)),
+    }
+    LOGGER.info(
+        "Échelle calibrée sur %d images hors banque : médiane %.3f, sigma %.3f, "
+        "q99 %.3f (patch).",
+        stats["n_images"], stats["patch"]["median"], stats["patch"]["sigma"],
+        stats["patch"]["q99"],
+    )
+    return stats
+
+
 def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
             progress=None, random_subset=False, overrides=None,
             num_workers=NUM_WORKERS):
@@ -237,9 +315,15 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
         fit_seconds, len(bank), peak_rss_gb,
     )
 
+    notify("calibration", 0, 0)
+    calibration = nominal_scores(
+        instance, spec, cfg, seed, device, extra_config, num_workers
+    )
+
     config = {
         **(extra_config or {}),
         **cfg,
+        "nominal_scores": calibration,
         "device": str(device),
         "node": platform.node(),
         "cluster": platform.node().split(".")[0].split("-")[0],

@@ -100,6 +100,7 @@ function showBank(dir) {
     ["banque", m.bank_size ? num(m.bank_size) + " vect." : null],
     ["taille", m.bank_gb ? m.bank_gb.toFixed(2) + " Go" : null],
     ["images fit", num(m.train_images)],
+    ["échelle", m.vmax_calibre ? "q999 " + m.vmax_calibre : null],
   ];
   $("chips").innerHTML = chips
     .filter(([, v]) => v)
@@ -108,13 +109,21 @@ function showBank(dir) {
     .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${esc(v)}</b></div>`)
     .join("");
 
+  // Échelle mesurée si la banque en porte une, devinée sinon. Mesurée, elle ne
+  // dépend plus de la couche : c'est le q999 des scores nominaux de cette
+  // banque-ci, pas un ordre de grandeur repris d'ailleurs.
+  const mesure = m.vmax_calibre;
   const hint = VMAX_HINT[m.layers];
   const range = hint === undefined ? null : [].concat(hint);
-  $("vmaxhint").textContent = range
-    ? `${range.join("–")} pour ${m.layers}` : "inconnu pour " + (m.layers || "?");
+  const propose = mesure !== undefined && mesure !== null ? mesure : (range && range[0]);
+  $("vmaxhint").textContent = mesure !== undefined && mesure !== null
+    ? `${mesure} mesuré sur ${m.calib_images} images hors banque`
+    : range
+      ? `${range.join("–")} pour ${m.layers} (estimé)`
+      : "inconnu pour " + (m.layers || "?");
   // Pré-remplit tant que la boucle ne tourne pas : en cours, l'utilisateur a
   // peut-être déjà ajusté à la main.
-  if (range && !$("vmax").disabled) $("vmax").value = range[0];
+  if (propose && !$("vmax").disabled) $("vmax").value = propose;
 }
 
 function fillBanks(banks, keep) {
