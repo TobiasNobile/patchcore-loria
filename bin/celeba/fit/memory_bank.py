@@ -8,7 +8,7 @@ fit_config.json. Réglages surchargeables : cf. experiments.pipelines.fit_settin
 
 import logging
 
-from experiments.datasets import CELEBA
+from experiments.benchmarks import CELEBA
 from experiments.pipelines import run_fit
 
 if __name__ == "__main__":

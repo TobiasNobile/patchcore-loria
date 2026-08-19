@@ -11,7 +11,7 @@ import logging
 
 import click
 
-from experiments.datasets import CELEBA
+from experiments.benchmarks import CELEBA
 from experiments.pipelines import run_histogram
 
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"

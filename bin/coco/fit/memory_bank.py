@@ -10,7 +10,7 @@ surchargeables : cf. experiments.pipelines.fit_settings.
 import logging
 import os
 
-from experiments.datasets import COCO
+from experiments.benchmarks import COCO
 from experiments.pipelines import run_fit
 
 SOURCE = os.environ.get(

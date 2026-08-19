@@ -13,7 +13,7 @@ import PIL.Image
 import torch
 from torchvision import transforms
 
-from patchcore.datasets.coco import DatasetSplit
+from patchcore.datasets import DatasetSplit
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

@@ -23,7 +23,6 @@ import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
-import patchcore.tracking
 import patchcore.utils
 from experiments.metrics import histogram_jaccard, normalized_wasserstein, t_test_scores
 from experiments.runtime import select_device
@@ -445,8 +444,12 @@ def run_histogram(spec, bank_dir, output_path, log_project, n_per_class):
     run_name = "hist-ts{}-p{:g}-nn{}".format(
         fit_config["train_subset"], fit_config["coreset_pct"], num_nn
     )
-    # Sidecar garanti, MLflow best-effort : son file store NFS lâche en parallèle.
+    # Sidecar garanti, MLflow best-effort : son file store NFS lâche en parallèle,
+    # et mlflow lui-même n'est installé qu'avec l'extra `experiments`. D'où
+    # l'import ici plutôt qu'en tête : la démo n'a pas à le tirer.
     try:
+        import patchcore.tracking
+
         with patchcore.tracking.patchcore_run(
             experiment=log_project, run_name=run_name, params=params
         ) as run:

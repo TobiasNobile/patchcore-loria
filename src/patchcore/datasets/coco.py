@@ -2,12 +2,13 @@ import json
 import logging
 import os
 import random
-from enum import Enum
 
 import numpy as np
 import PIL.Image
 import torch
 from torchvision import transforms
+
+from patchcore.datasets import DatasetSplit
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,11 +24,6 @@ _TEST_FRACTION = 0.2
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-
-
-class DatasetSplit(Enum):
-    TRAIN = "train"
-    TEST = "test"
 
 
 class CocoDataset(torch.utils.data.Dataset):
