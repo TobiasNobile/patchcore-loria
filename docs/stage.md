@@ -21,9 +21,14 @@ tools/
   dataset_export.py         # zips « good » de MTD et mini-ShanghaiTech
   aggregate_runs.py         # moyenne ± écart-type par configuration
   mlflow_import.py          # rapatrie les runs distants dans mlruns.db
+test/                       # la suite pytest du cœur et des pipelines
 grid5000_run.sh             # exécute un script sur un nœud GPU de Grid'5000
 remote_run.sh               # idem sur le DCE de CentraleSupélec Metz
 ```
+
+Les tests couvrent `sampler.py` et `patchcore.py`, les deux fichiers modifiés
+par rapport à l'amont : `test_coreset_sampling_on_same_samples` est ce qui
+soutient la ligne « sélection numériquement identique » du README.
 
 Ces scripts installés :
 
