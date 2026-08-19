@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# fit_and_score.sh — COCO « personne + couteau » en UN job OAR : fetch sur le
+# /tmp du nœud, fit de la banque (personne SANS couteau), histogramme, heatmaps.
+# Seuls la banque et results/coco/ survivent au job.
+#
+#   REMOTE_ENV="FIT_TRAIN_SUBSET=20000" \
+#   OAR_RESOURCES='host=1' OAR_WALLTIME=06:00:00 OAR_PROPERTIES="cluster='gres'" \
+#   DETACH=true ./grid5000_run.sh bin/coco/fit_and_score.sh
+set -euo pipefail
+
+export FIT_SAMPLER="${FIT_SAMPLER:-approx_greedy_coreset}"
+export FIT_CORESET_PCT="${FIT_CORESET_PCT:-0.05}"
+export FIT_CORESET_PROJ_DIM="${FIT_CORESET_PROJ_DIM:-64}"
+export FIT_NUM_NN="${FIT_NUM_NN:-3}"
+export FIT_TRAIN_SUBSET="${FIT_TRAIN_SUBSET:-20000}"
+export FIT_MODELS_DIR="${FIT_MODELS_DIR:-models/coco}"     # home = banque conservée
+export COCO_PATH="${COCO_PATH:-/tmp/${USER}/coco}"          # images node-local
+# La banque (~qq Go à 5%) tient en VRAM -> FAISS GPU au scoring, sinon la
+# recherche CPU sur 1,5 M+ vecteurs traîne et dépasse le walltime.
+export HIST_FAISS_GPU="${HIST_FAISS_GPU:-1}"
+export INFER_FAISS_GPU="${INFER_FAISS_GPU:-1}"
+HEATMAPS_PER_CLASS="${HEATMAPS_PER_CLASS:-15}"             # 15+15 = 30
+NPC="${NPC:-1000}"                                          # n_per_class histogramme
+SEED=0
+
+# 1) FETCH — assez de normal pour la banque + le 20% réservé au test.
+#    train = 0.8 * CAP_NORMAL, donc CAP_NORMAL = 1.25 * ts + marge.
+export CAP_NORMAL="${CAP_NORMAL:-$(( FIT_TRAIN_SUBSET * 5 / 4 + 3000 ))}"
+export CAP_ANOMALY="${CAP_ANOMALY:-0}"                      # toutes les images couteau
+export DEST="${COCO_PATH}"
+echo "=== FETCH COCO -> ${COCO_PATH} (CAP_NORMAL=${CAP_NORMAL}) ==="
+python tools/coco_fetch.py
+
+# tag identique à build_tag() du fit (suffixe layer vide pour le défaut layer2+3).
+# Le tag vient de build_tag() : une seule source de vérité avec le fit.
+read -r TAG SUFFIX <<<"$(python -c "
+from experiments.pipelines import build_tag, fit_settings
+cfg = fit_settings('${FIT_MODELS_DIR}', 0.05, None)
+layers = cfg['layers_to_extract_from']
+suffix = '' if layers == ['layer2', 'layer3'] else '_' + '-'.join(
+    l.replace('layer', 'l') for l in layers)
+print(build_tag(cfg), suffix)
+")"
+BANK_DIR="${FIT_MODELS_DIR}/${TAG}"
+
+echo "=== FIT === ts=${FIT_TRAIN_SUBSET} pct=${FIT_CORESET_PCT} proj=${FIT_CORESET_PROJ_DIM} nn=${FIT_NUM_NN} layers=${FIT_LAYERS:-layer2,layer3}"
+echo "    -> ${TAG}"
+echo "    banque (conservée) -> ${BANK_DIR}"
+python bin/coco/fit/memory_bank.py
+
+echo "=== HISTOGRAMME good vs knife ==="
+export HIST_BANK_DIR="${BANK_DIR}"
+export HIST_OUTPUT_PATH="results/coco/histograms/hist_coco_${TAG}_nn${FIT_NUM_NN}.png"
+export HEATMAP_OUTPUT_PATH="results/coco/heatmaps${SUFFIX}/overlay_idx{idx}.png"
+python bin/coco/infer/histogram.py --n_per_class "${NPC}"
+
+echo "=== 30 HEATMAPS (${HEATMAPS_PER_CLASS} good + ${HEATMAPS_PER_CLASS} knife) ==="
+python bin/coco/infer/heatmap.py --n_per_class "${HEATMAPS_PER_CLASS}"
+
+echo "=== Terminé ==="
+echo "    Banque   : ${BANK_DIR}"
+echo "    Histo    : results/coco/histograms/p${FIT_CORESET_PCT}/"
+echo "    Heatmaps : results/coco/heatmaps${SUFFIX}/ts${FIT_TRAIN_SUBSET}_p${FIT_CORESET_PCT}/"
