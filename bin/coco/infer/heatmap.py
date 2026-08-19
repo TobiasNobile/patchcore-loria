@@ -8,7 +8,7 @@ import logging
 import click
 
 from experiments.benchmarks import COCO
-from experiments.pipelines import run_heatmaps
+from experiments.reports import run_heatmaps
 
 BANK_DIR = "models/coco/wideresnet50_approx_greedy_coreset_p0.05_ts20000_s0"
 OUTPUT_PATH = "results/coco/heatmaps/overlay_idx{idx}.png"

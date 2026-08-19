@@ -11,7 +11,7 @@ import logging
 import click
 
 from experiments.datasets import SCENE
-from experiments.pipelines import run_histogram
+from experiments.reports import run_histogram
 
 BANK_DIR = "models/scene/wideresnet50_approx_greedy_coreset_p0.1_tsall_s0"
 OUTPUT_PATH = "results/scene/histograms/hist_scene.png"

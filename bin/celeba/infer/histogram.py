@@ -12,7 +12,7 @@ import logging
 import click
 
 from experiments.benchmarks import CELEBA
-from experiments.pipelines import run_histogram
+from experiments.reports import run_histogram
 
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts2000_s0"
 OUTPUT_PATH = "results/celeba/histograms/hist_celeba.png"
