@@ -64,6 +64,7 @@ function readParams() {
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
     alpha: alphaExp(),
+    norm: $("norm").value,
     smoothing: smoothingMode(),
     smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
     loop: $("loop").checked,
@@ -111,16 +112,19 @@ function showBank(dir) {
 
   // Échelle mesurée si la banque en porte une, devinée sinon. Mesurée, elle ne
   // dépend plus de la couche : c'est le q999 des scores nominaux de cette
-  // banque-ci, pas un ordre de grandeur repris d'ailleurs.
-  const mesure = m.vmax_calibre;
+  // banque-ci, pas un ordre de grandeur repris d'ailleurs. En écarts robustes,
+  // la même borne devient comparable d'une banque à l'autre.
+  const brut = $("norm").value === "none";
+  const mesure = brut ? m.vmax_calibre : m.vmax_calibre_z;
   const hint = VMAX_HINT[m.layers];
   const range = hint === undefined ? null : [].concat(hint);
-  const propose = mesure !== undefined && mesure !== null ? mesure : (range && range[0]);
+  const propose = mesure !== undefined && mesure !== null
+    ? mesure : (brut && range ? range[0] : null);
   $("vmaxhint").textContent = mesure !== undefined && mesure !== null
-    ? `${mesure} mesuré sur ${m.calib_images} images hors banque`
-    : range
+    ? `${mesure}${brut ? "" : " écarts"} · mesuré sur ${m.calib_images} images hors banque`
+    : brut && range
       ? `${range.join("–")} pour ${m.layers} (estimé)`
-      : "inconnu pour " + (m.layers || "?");
+      : "banque sans échelle mesurée — refitter pour l'obtenir";
   // Pré-remplit tant que la boucle ne tourne pas : en cours, l'utilisateur a
   // peut-être déjà ajusté à la main.
   if (propose && !$("vmax").disabled) $("vmax").value = propose;
@@ -398,6 +402,10 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 ["zoom", "vmax", "stride"].forEach((id) => {
   $(id).addEventListener("input", () =>
     post("/api/update", { [id]: parseFloat($(id).value) }));
+});
+$("norm").addEventListener("change", () => {
+  post("/api/update", { norm: $("norm").value });
+  showBank($("bank_dir").value);   // la borne conseillée change d'unité
 });
 $("smoothwin").addEventListener("input", () =>
   post("/api/update", { smoothing_seconds: parseFloat($("smoothwin").value || "0.3") }));

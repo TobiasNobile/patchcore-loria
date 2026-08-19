@@ -31,15 +31,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # live_camera d'abord : torch avant faiss, sinon abort libomp.
 from live_camera import (  # isort: skip
+    CALIB_SECONDS,
+    Echelle,
     FAISS_NUM_WORKERS,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
+    NORM_MODES,
     SMOOTHING_MODES,
     SMOOTHING_SECONDS,
     SMOOTHING_SECONDS_MAX,
     aggregate,
     calculer_nb_heatmaps,
     build_transform,
+    normaliser,
     preprocess,
     resolve_device,
     tune_faiss_small_batches,
@@ -167,6 +171,30 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
+def _ouvrir_journal(meta):
+    """Un JSONL par session de scoring, sous results/live/.
+
+    Une ligne par inférence : les statistiques de la frame, l'échelle en vigueur
+    et la fraction saturée. C'est l'instrument de mesure de la dérive — sans lui
+    on ne compare rien, et il coûte moins qu'une ligne de log.
+    """
+    if os.environ.get("LIVE_LOG", "1") == "0":
+        return None
+    tache = (meta or {}).get("task") or "live"
+    chemin = os.path.join(
+        _ROOT, "results", "live",
+        "{}_{}.jsonl".format(tache, time.strftime("%Y%m%d-%H%M%S")),
+    )
+    os.makedirs(os.path.dirname(chemin), exist_ok=True)
+    LOGGER.info("Journal de scoring : %s", chemin)
+    return open(chemin, "w", buffering=1)
+
+
+def _journaliser(journal, ligne):
+    if journal is not None:
+        journal.write(json.dumps(ligne) + "\n")
+
+
 def _echelle_calibree(cfg):
     """Ce que le fit a mesuré des scores nominaux, s'il l'a mesuré.
 
@@ -177,8 +205,13 @@ def _echelle_calibree(cfg):
     patch = calib.get("patch") or {}
     if not patch:
         return {}
+    sigma = max(patch["sigma"], 1e-6)
     return {
         "vmax_calibre": round(patch["q999"], 2),
+        # La même borne, en écarts robustes : c'est elle que la page propose
+        # quand le score est normalisé, et elle est comparable d'une banque à
+        # l'autre là où la valeur absolue ne l'est pas.
+        "vmax_calibre_z": round((patch["q999"] - patch["median"]) / sigma, 1),
         "calib_images": calib.get("n_images"),
         "calib_median": round(patch["median"], 3),
         "calib_sigma": round(patch["sigma"], 3),
@@ -258,6 +291,7 @@ class Runner:
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
             "alpha": HEATMAP_ALPHA, "stride": 1, "smoothing": "none",
             "smoothing_seconds": SMOOTHING_SECONDS,
+            "norm": "banque",
         }
 
     def state(self):
@@ -281,6 +315,8 @@ class Runner:
                 self._live["stride"] = max(1, int(fields["stride"]))
             if fields.get("smoothing") in SMOOTHING_MODES:
                 self._live["smoothing"] = fields["smoothing"]
+            if fields.get("norm") in NORM_MODES:
+                self._live["norm"] = fields["norm"]
             if fields.get("smoothing_seconds") is not None:
                 self._live["smoothing_seconds"] = clamp_seconds(
                     fields["smoothing_seconds"])
@@ -352,6 +388,8 @@ class Runner:
                 "smoothing": params.get("smoothing", "none"),
                 "smoothing_seconds": clamp_seconds(
                     params.get("smoothing_seconds", SMOOTHING_SECONDS)),
+                "norm": (params["norm"] if params.get("norm") in NORM_MODES
+                         else "banque"),
             }
         self._wake.set()
         return True, None
@@ -481,6 +519,7 @@ class Runner:
 
     def _run(self, params):
         capture = None
+        journal = None
         try:
             tune_faiss_small_batches()
             device, device_note = resolve_device(params["device"])
@@ -543,9 +582,18 @@ class Runner:
             )
             # Cartes scorées récentes et leur agrégat, recalculé à l'inférence seulement.
             heatmaps = deque(maxlen=window)
+            # Même mécanique de fenêtre que le lissage, autre constante de temps :
+            # 1/3 s stabilise l'affichage, 20 s estiment une distribution.
+            echelle = Echelle(
+                fit_config,
+                calculer_nb_heatmaps(source_fps, effective_stride, CALIB_SECONDS),
+            )
+            journal = _ouvrir_journal(self._bank_meta)
+            debut_session = time.perf_counter()
             self._update(smoothing_frames=window, source_fps=float(source_fps or 0))
             smoothed = heatmap
             smoothed_mode = "none"
+            norm_actif = None
             frame_index = 0
             fps = 0.0
             infer_ms = 0.0
@@ -588,6 +636,7 @@ class Runner:
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
                     seconds = self._live["smoothing_seconds"]
+                    norm = self._live["norm"]
                 # deque(iterable, maxlen) garde les derniers éléments : le lissage
                 # se resserre ou s'élargit sans repartir de zéro.
                 want = calculer_nb_heatmaps(
@@ -596,6 +645,15 @@ class Runner:
                     scores = deque(scores, maxlen=want)
                     heatmaps = deque(heatmaps, maxlen=want)
                     self._update(smoothing_frames=want)
+                echelle.redimensionner(
+                    calculer_nb_heatmaps(
+                        source_fps, max(stride, effective_stride), CALIB_SECONDS))
+                if norm != norm_actif:
+                    # Les cartes en attente sont dans l'ancienne unité : les
+                    # mélanger ferait clignoter l'affichage le temps du lissage.
+                    scores.clear()
+                    heatmaps.clear()
+                    norm_actif = norm
 
                 tensor, preview = preprocess(frame, transform, zoom)
 
@@ -610,13 +668,42 @@ class Runner:
                     t0 = time.perf_counter()
                     batch_scores, batch_masks = patchcore_instance.predict(tensor)
                     infer_ms = 1000.0 * (time.perf_counter() - t0)
-                    scores.append(float(batch_scores[0]))
+
+                    # La carte brute sert à mesurer l'échelle ; c'est la carte
+                    # normalisée qui part à l'affichage et au lissage.
+                    brute = np.asarray(batch_masks[0])
+                    med_frame, sigma_frame = echelle.observer(brute)
+                    unite = echelle.courante(norm)
+                    heatmap = normaliser(brute, unite)
+                    score_brut = float(batch_scores[0])
+                    score_frame = (score_brut if unite is None
+                                   else (score_brut - unite[0]) / max(unite[1], 1e-6))
+
+                    scores.append(score_frame)
                     score = float(aggregate(list(scores), smoothing))
-                    heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
                     smoothed = aggregate(list(heatmaps), smoothing)
                     smoothed_mode = smoothing
-                    self._update(score=score, infer_ms=infer_ms)
+                    self._update(
+                        score=score, infer_ms=infer_ms,
+                        echelle=None if unite is None
+                                else [round(unite[0], 4), round(unite[1], 4)],
+                    )
+                    _journaliser(journal, {
+                        "t": round(time.perf_counter() - debut_session, 3),
+                        "frame": frame_index,
+                        "norm": norm,
+                        "med_frame": round(med_frame, 4),
+                        "sigma_frame": round(sigma_frame, 4),
+                        "q99_frame": round(float(np.quantile(brute, 0.99)), 4),
+                        "max_frame": round(float(brute.max()), 4),
+                        "ech_med": None if unite is None else round(unite[0], 4),
+                        "ech_sigma": None if unite is None else round(unite[1], 4),
+                        "score": round(score_frame, 4),
+                        "vmax": vmax,
+                        "sature": round(float((heatmap > vmax).mean()), 5),
+                        "infer_ms": round(infer_ms, 1),
+                    })
 
                 # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
@@ -638,6 +725,8 @@ class Runner:
             LOGGER.exception("Boucle interrompue")
             self._update(error=str(exc))
         finally:
+            if journal is not None:
+                journal.close()
             if capture is not None:
                 capture.release()
             self._update(running=False)
