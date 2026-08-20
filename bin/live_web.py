@@ -578,12 +578,15 @@ class Runner:
                     "Filmer plus longtemps, ou monter les images par seconde."
                     .format(images))
 
-            pkg_path = self._construire_banque(staging, params, t0, images)
-            staging = None
-            LOGGER.info("Enrolement termine : %s", pkg_path)
+            banque = self._construire_banque(
+                staging, params, t0, images, stocker=params["stocker"])
+            if params["stocker"]:
+                staging = None      # consommé : déplacé à côté du .pkg
+            LOGGER.info("Enrolement termine : %s", banque)
 
-            # Enchaîne sur la banque qui vient d'être construite.
-            suite = dict(params, bank_dir=pkg_path)
+            # Enchaîne sur la banque qui vient d'être construite. Non stockée,
+            # elle vit dans staging et disparaît avec lui à l'arrêt du scoring.
+            suite = dict(params, bank_dir=banque)
             with self._lock:
                 self._stop.clear()
                 self._preparer_run(suite)
@@ -615,8 +618,9 @@ class Runner:
             with self._lock:
                 self._jpeg = buf.tobytes()
 
-    def _construire_banque(self, staging, params, t0, available):
-        """<staging>/normal/ -> banque -> coresets/<nom>.pkg. Renvoie le .pkg.
+    def _construire_banque(self, staging, params, t0, available, stocker=True):
+        """<staging>/normal/ -> banque. Renvoie le .pkg, ou le dossier de banque
+        lui-même quand on ne stocke pas.
 
         Commun au fit depuis un zip et à l'enrôlement caméra : les deux ne
         diffèrent que par la façon dont les images arrivent dans staging.
@@ -653,9 +657,21 @@ class Runner:
             },
         )
 
-        self._update_fit(phase="empaquetage", done=0, total=0)
         with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
             config = json.load(fh)
+
+        if not stocker:
+            # Ni empaquetée ni déplacée : elle reste dans staging, que l'appelant
+            # supprimera à l'arrêt du scoring. Une banque de démonstration refaite
+            # toutes les deux minutes n'a pas à laisser un .pkg derrière elle.
+            self._update_fit(
+                running=False, phase="terminé", name=os.path.basename(bank_dir),
+                trained=config.get("n_train_images"),
+                seconds=time.perf_counter() - t0,
+            )
+            return bank_dir
+
+        self._update_fit(phase="empaquetage", done=0, total=0)
         name = patchcore.packaging.build_name(config, params["task"])
         pkg_path = patchcore.packaging.pack(bank_dir, os.path.join(CORESETS_DIR, name))
 
@@ -681,7 +697,11 @@ class Runner:
         try:
             tune_faiss_small_batches()
             device, device_note = resolve_device(params["device"])
-            patchcore_instance, fit_config = patchcore.packaging.load(
+            # Une banque non stockée reste un dossier : la charger telle quelle
+            # évite un zip suivi d'un dézip, pour un fichier qu'on jette après.
+            charger = (patchcore.banks.load_bank if os.path.isdir(params["bank_dir"])
+                       else patchcore.packaging.load)
+            patchcore_instance, fit_config = charger(
                 params["bank_dir"], device,
                 params["faiss_gpu"], params["faiss_threads"],
             )
@@ -1207,6 +1227,9 @@ class Handler(BaseHTTPRequestHandler):
                                if l in FIT_LAYERS],
                     "coreset_pct": float(p.get("coreset_pct") or FIT_DEFAULT_CORESET_PCT),
                     "train_subset": int(p.get("train_subset") or 0),
+                    # Non cochée, la banque ne survit pas au scoring : c'est le
+                    # défaut, parce qu'une prise se refait en vingt secondes.
+                    "stocker": bool(p.get("stocker")),
                     "stride": max(1, int(p.get("stride") or 1)),
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),

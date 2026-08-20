@@ -160,6 +160,7 @@ $("srcmode").addEventListener("change", () => {
   $("archive").hidden = mode !== "zip";
   $("folder").hidden = mode !== "dir";
   $("onlinefields").hidden = mode !== "online";
+  $("storefield").hidden = mode !== "online";
   // En mode online il n'y a rien à envoyer : la caméra fournit les images, et le
   // scoring démarre tout seul sur la banque obtenue.
   $("dofit").textContent = mode === "online" ? "Filmer, fitter, démarrer" : "Fitter";
@@ -320,6 +321,7 @@ fitForm.addEventListener("submit", async (e) => {
       dataset: "camera",
       duree_s: parseFloat($("duree_s").value || "20"),
       images_par_s: parseFloat($("images_par_s").value || "5"),
+      stocker: $("stocker").checked,
     }));
     if (res.error) { $("fiterror").textContent = res.error; $("fitstatus").textContent = ""; }
     refresh();
