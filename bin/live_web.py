@@ -1178,11 +1178,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "not found", "text/plain")
 
 
+def _balayer_incomplets():
+    """Supprime les dossiers de travail laissés par une session tuée net.
+
+    Une banque non stockée vit dans coresets/.incoming-* le temps du scoring et
+    disparaît avec lui — sauf si le serveur est arrêté brutalement, auquel cas
+    elle s'accumule à côté des banques.
+    """
+    for nom in os.listdir(CORESETS_DIR) if os.path.isdir(CORESETS_DIR) else []:
+        if nom.startswith(".incoming-"):
+            shutil.rmtree(os.path.join(CORESETS_DIR, nom), ignore_errors=True)
+            LOGGER.info("Dossier de travail orphelin supprimé : %s", nom)
+
+
 @click.command()
 @click.option("--host", default="127.0.0.1", show_default=True,
               help="Loopback par défaut : la page n'a aucune authentification.")
 @click.option("--port", default=8000, show_default=True)
 def main(host, port):
+    _balayer_incomplets()
     server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     LOGGER.info("Interface sur http://%s:%d — ctrl-c pour quitter.", host, port)
