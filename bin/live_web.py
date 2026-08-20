@@ -369,7 +369,7 @@ class Runner:
             self._stop.clear()
             self._pending = ("online", params)
             self._fit = {
-                "running": True, "phase": "enrôlement", "done": 0,
+                "running": True, "phase": "Filmage en cours", "done": 0,
                 "total": int(params["duree_s"]), "name": None, "error": None,
                 "seconds": 0.0, "images": 0, "trained": None,
             }
@@ -493,7 +493,7 @@ class Runner:
                     if not source.isdigit():
                         capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         continue
-                    raise RuntimeError("Flux interrompu pendant l'enrolement.")
+                    raise RuntimeError("Flux interrompu pendant le filmage.")
                 # Même miroir qu'au scoring : un réseau de convolution ne voit
                 # pas une scène et son reflet de la même façon, et la banque doit
                 # être construite dans la géométrie où elle servira.
@@ -514,7 +514,7 @@ class Runner:
             self._update(filming=False)
 
             if self._stop.is_set():
-                raise KeyboardInterrupt("Enrolement interrompu.")
+                raise KeyboardInterrupt("Filmage interrompu.")
             if images < ENROL_MIN_IMAGES:
                 raise RuntimeError(
                     "{} images seulement : trop peu pour definir un normal. "
@@ -553,7 +553,7 @@ class Runner:
         enregistrée : la banque ne doit contenir que la scène."""
         vue = frame.copy()
         cv2.rectangle(vue, (0, 0), (vue.shape[1], 58), (24, 24, 24), -1)
-        cv2.putText(vue, "ENROLEMENT  {:>2}s   {} images".format(
+        cv2.putText(vue, "FILMAGE  {:>2}s   {} images".format(
             max(int(restant + 0.999), 0), images),
             (16, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2)
         ok, buf = cv2.imencode(".jpg", vue, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
@@ -1148,7 +1148,7 @@ class Handler(BaseHTTPRequestHandler):
             # Bornes larges, mais une prise de deux heures remplirait le disque et
             # une prise d'une seconde ne définirait rien.
             if not 2.0 <= params["duree_s"] <= 600.0:
-                self._json({"error": "Durée d'enrôlement hors de [2 s, 600 s]."}, 400)
+                self._json({"error": "Durée de filmage hors de [2 s, 600 s]."}, 400)
                 return
             if not 0.5 <= params["images_par_s"] <= 30.0:
                 self._json({"error": "Images par seconde hors de [0,5 ; 30]."}, 400)

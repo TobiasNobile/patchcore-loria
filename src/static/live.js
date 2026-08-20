@@ -298,7 +298,7 @@ fitForm.addEventListener("submit", async (e) => {
   if (srcMode() === "online") {
     // Un seul appel : la page n'a pas à orchestrer prise, fit et scoring, qui
     // occupent de toute façon le même thread côté serveur.
-    $("fitstatus").textContent = "enrôlement…";
+    $("fitstatus").textContent = "Filmage en cours…";
     const res = await post("/api/online", Object.assign(readParams(), {
       task: $("task").value,
       backbone: $("backbone").value,
