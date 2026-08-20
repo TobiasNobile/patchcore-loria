@@ -691,6 +691,10 @@ class Runner:
                     )
                     _journaliser(journal, {
                         "t": round(time.perf_counter() - debut_session, 3),
+                        # Position DANS la vidéo, seule à pouvoir être recoupée
+                        # avec un clip labellisé : le temps de session compte
+                        # aussi les frames sautées et les rembobinages.
+                        "pos_s": round(capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 3),
                         "frame": frame_index,
                         "norm": norm,
                         "med_frame": round(med_frame, 4),
