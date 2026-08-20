@@ -156,9 +156,13 @@ function datasetName() {
 }
 
 $("srcmode").addEventListener("change", () => {
-  const dir = srcMode() === "dir";
-  $("archive").hidden = dir;
-  $("folder").hidden = !dir;
+  const mode = srcMode();
+  $("archive").hidden = mode !== "zip";
+  $("folder").hidden = mode !== "dir";
+  $("onlinefields").hidden = mode !== "online";
+  // En mode online il n'y a rien à envoyer : la caméra fournit les images, et le
+  // scoring démarre tout seul sur la banque obtenue.
+  $("dofit").textContent = mode === "online" ? "Filmer, fitter, démarrer" : "Fitter";
   $("fiterror").textContent = "";
 });
 
@@ -302,6 +306,25 @@ fitForm.addEventListener("submit", async (e) => {
   $("fiterror").textContent = "";
   const layers = selectedLayers();
   if (!layers.length) { $("fiterror").textContent = "Choisir au moins une couche."; return; }
+
+  if (srcMode() === "online") {
+    // Un seul appel : la page n'a pas à orchestrer prise, fit et scoring, qui
+    // occupent de toute façon le même thread côté serveur.
+    $("fitstatus").textContent = "enrôlement…";
+    const res = await post("/api/online", Object.assign(readParams(), {
+      task: $("task").value,
+      backbone: $("backbone").value,
+      layers: layers,
+      coreset_pct: parseFloat($("coreset_pct").value),
+      train_subset: parseInt($("train_subset").value || "0", 10),
+      dataset: "camera",
+      duree_s: parseFloat($("duree_s").value || "20"),
+      images_par_s: parseFloat($("images_par_s").value || "5"),
+    }));
+    if (res.error) { $("fiterror").textContent = res.error; $("fitstatus").textContent = ""; }
+    refresh();
+    return;
+  }
 
   let body;
   try {

@@ -81,6 +81,15 @@ FIT_DEFAULT_CORESET_PCT = 0.01
 # demandent déjà des heures et un GPU. Au-delà, le tirage est aléatoire.
 FIT_MAX_IMAGES = 20_000
 
+# Enrôlement caméra. Quelques images par seconde suffisent : deux frames
+# consécutives à 30 fps ne montrent pas la même scène sous deux angles, elles
+# montrent deux fois la même chose.
+ENROL_SECONDES = 20.0
+ENROL_IMAGES_PAR_S = 5.0
+# En deçà, la banque ne couvre pas assez de variations pour que « normal » veuille
+# dire quelque chose, et tout ce qui bouge ensuite sera scoré comme anormal.
+ENROL_MIN_IMAGES = 20
+
 # Banque présélectionnée à l'ouverture de la page : sans elle, c'est la première
 # de coresets/ dans l'ordre alphabétique, qui n'a aucune raison d'être la bonne.
 # Comparaison par sous-chaîne sur le nom, pour survivre à un changement de
@@ -267,6 +276,9 @@ class Runner:
         self._bank_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
             "running": False,
+            # Vrai pendant l'enrôlement : la caméra tourne, rien n'est encore
+            # scoré, et l'aperçu doit quand même parvenir à la page.
+            "filming": False,
             "score": None,
             "fps": 0.0,
             "infer_ms": 0.0,
@@ -371,25 +383,52 @@ class Runner:
                 return False, "Un fit est en cours — attendre qu'il finisse."
             self._stop.clear()
             self._pending = ("live", params)
-            self._jpeg = None
-            # running dès maintenant : la page fige ses champs sans attendre la banque.
-            self._state.update(
-                running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
-                error=None, params=params, device_note=None,
-                smoothing_frames=0, source_fps=0.0,
-            )
-            # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
-            self._live = {
-                "zoom": clamp_zoom(params.get("zoom", 1.0)),
-                "vmin": HEATMAP_VMIN,
-                "vmax": float(params.get("vmax", HEATMAP_VMAX)),
-                "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
-                "stride": max(1, int(params.get("stride", 1))),
-                "smoothing": params.get("smoothing", "none"),
-                "smoothing_seconds": clamp_seconds(
-                    params.get("smoothing_seconds", SMOOTHING_SECONDS)),
-                "norm": (params["norm"] if params.get("norm") in NORM_MODES
-                         else "banque"),
+            self._preparer_run(params)
+        self._wake.set()
+        return True, None
+
+    def _preparer_run(self, params):
+        """État initial d'un scoring. Appelé sous le verrou, avant de le lancer."""
+        self._jpeg = None
+        # running dès maintenant : la page fige ses champs sans attendre la banque.
+        self._state.update(
+            running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
+            error=None, params=params, device_note=None,
+            smoothing_frames=0, source_fps=0.0,
+        )
+        # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
+        self._live = {
+            "zoom": clamp_zoom(params.get("zoom", 1.0)),
+            "vmin": HEATMAP_VMIN,
+            "vmax": float(params.get("vmax", HEATMAP_VMAX)),
+            "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
+            "stride": max(1, int(params.get("stride", 1))),
+            "smoothing": params.get("smoothing", "none"),
+            "smoothing_seconds": clamp_seconds(
+                params.get("smoothing_seconds", SMOOTHING_SECONDS)),
+            "norm": (params["norm"] if params.get("norm") in NORM_MODES
+                     else "banque"),
+        }
+
+    def start_online(self, params):
+        """Enrôler depuis la caméra, fitter, puis scorer — sans passer par un zip.
+
+        Un seul travail pour les trois étapes : elles occupent toutes le thread
+        principal, et les enchaîner ici évite à la page d'avoir à les
+        orchestrer. C'est aussi ce qui permet de refaire une banque en cours de
+        route sans rien décharger.
+        """
+        with self._lock:
+            if self._state["running"]:
+                return False, "La caméra tourne — l'arrêter avant d'enrôler."
+            if self._fit["running"]:
+                return False, "Un fit est déjà en cours."
+            self._stop.clear()
+            self._pending = ("online", params)
+            self._fit = {
+                "running": True, "phase": "enrôlement", "done": 0,
+                "total": int(params["duree_s"]), "name": None, "error": None,
+                "seconds": 0.0, "images": 0, "trained": None,
             }
         self._wake.set()
         return True, None
@@ -431,6 +470,8 @@ class Runner:
             kind, params = job
             if kind == "fit":
                 self._fit_bank(params)
+            elif kind == "online":
+                self._enroler_et_scorer(params)
             else:
                 self._run(params)
 
@@ -455,52 +496,8 @@ class Runner:
             # Rien d'écarté : tsall plutôt qu'un ts<n> qui ferait croire à un tirage.
             subset = None if subset >= available else subset
             self._update_fit(images=available)
-
-            def progress(phase, done, total):
-                if self._stop.is_set():
-                    raise KeyboardInterrupt("Fit interrompu.")
-                self._update_fit(
-                    phase=phase, done=done, total=total,
-                    seconds=time.perf_counter() - t0,
-                )
-
-            # SCENE lit SCENE_PATH ; `source` le réinscrit pour l'inférence.
-            os.environ["SCENE_PATH"] = staging
-            bank_dir = run_fit(
-                SCENE, models_dir=staging, coreset_pct=FIT_DEFAULT_CORESET_PCT,
-                extra_config={"source": staging, "task": params["task"],
-                              "dataset": params["dataset"]},
-                progress=progress, random_subset=True,
-                # Pas de workers : leur spawn réimporte le module du serveur sur macOS.
-                num_workers=0,
-                overrides={
-                    "backbone_name": params["backbone"],
-                    "layers_to_extract_from": params["layers"],
-                    "coreset_pct": params["coreset_pct"],
-                    "train_subset": subset,
-                },
-            )
-
-            self._update_fit(phase="empaquetage", done=0, total=0)
-            with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
-                config = json.load(fh)
-            name = patchcore.packaging.build_name(config, params["task"])
-            pkg_path = patchcore.packaging.pack(bank_dir, os.path.join(CORESETS_DIR, name))
-
-            # Images déplacées après le .pkg : un fit raté ne laisse pas de dossier orphelin.
-            images_dir = os.path.join(CORESETS_DIR, name[: -len(patchcore.packaging.SUFFIX)])
-            shutil.rmtree(images_dir, ignore_errors=True)
-            shutil.rmtree(os.path.join(staging, os.path.basename(bank_dir)),
-                          ignore_errors=True)
-            os.replace(staging, images_dir)
+            pkg_path = self._construire_banque(staging, params, t0, available)
             staging = None
-
-            # trained < images : FolderDataset garde 20 % hors banque.
-            self._update_fit(
-                running=False, phase="terminé", name=name,
-                trained=config.get("n_train_images"),
-                seconds=time.perf_counter() - t0,
-            )
             LOGGER.info("Fit terminé : %s", pkg_path)
         except KeyboardInterrupt as exc:
             self._update_fit(running=False, phase=None, error=str(exc))
@@ -516,6 +513,167 @@ class Runner:
                 pass
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
+
+    def _enroler_et_scorer(self, params):
+        """Filme quelques secondes, fitte dessus, et enchaîne le scoring.
+
+        Les trois étapes tiennent dans un seul travail parce qu'elles occupent le
+        même thread. Le prix est une caméra rouverte entre l'enrôlement et le
+        scoring — une seconde — contre une orchestration à trois temps côté page.
+        """
+        t0 = time.perf_counter()
+        staging = os.path.join(CORESETS_DIR, ".incoming-{}".format(int(t0 * 1000)))
+        normal = os.path.join(staging, patchcore.uploads.NORMAL)
+        os.makedirs(normal, exist_ok=True)
+        capture = None
+        try:
+            source = params["source"]
+            capture = cv2.VideoCapture(int(source) if source.isdigit() else source)
+            if not capture.isOpened():
+                raise RuntimeError(
+                    "Impossible d'ouvrir la source '{}'.".format(source))
+            self._update(filming=True)
+
+            duree = float(params["duree_s"])
+            intervalle = 1.0 / max(float(params["images_par_s"]), 0.1)
+            prochaine, images = 0.0, 0
+            debut = time.perf_counter()
+            while True:
+                ecoule = time.perf_counter() - debut
+                if ecoule >= duree or self._stop.is_set():
+                    break
+                ok, frame = capture.read()
+                if not ok:
+                    # Une caméra ne s'arrête pas ; un fichier, si. Enrôler depuis
+                    # un enregistrement est un cas légitime — on le reboucle
+                    # plutôt que d'écourter la prise.
+                    if not source.isdigit():
+                        capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    raise RuntimeError("Flux interrompu pendant l'enrolement.")
+                # Même miroir qu'au scoring : un réseau de convolution ne voit
+                # pas une scène et son reflet de la même façon, et la banque doit
+                # être construite dans la géométrie où elle servira.
+                frame = cv2.flip(frame, 1)
+                # Cadencé sur l'horloge, pas sur le compte de frames : une caméra
+                # n'honore pas toujours la cadence qu'elle annonce.
+                if ecoule >= prochaine:
+                    cv2.imwrite(os.path.join(normal, "{:05d}.jpg".format(images)),
+                                frame)
+                    images += 1
+                    prochaine += intervalle
+                    self._update_fit(done=int(ecoule), images=images,
+                                     seconds=time.perf_counter() - t0)
+                self._apercu(frame, duree - ecoule, images)
+
+            capture.release()
+            capture = None
+            self._update(filming=False)
+
+            if self._stop.is_set():
+                raise KeyboardInterrupt("Enrolement interrompu.")
+            if images < ENROL_MIN_IMAGES:
+                raise RuntimeError(
+                    "{} images seulement : trop peu pour definir un normal. "
+                    "Filmer plus longtemps, ou monter les images par seconde."
+                    .format(images))
+
+            pkg_path = self._construire_banque(staging, params, t0, images)
+            staging = None
+            LOGGER.info("Enrolement termine : %s", pkg_path)
+
+            # Enchaîne sur la banque qui vient d'être construite.
+            suite = dict(params, bank_dir=pkg_path)
+            with self._lock:
+                self._stop.clear()
+                self._preparer_run(suite)
+            self._run(suite)
+        except KeyboardInterrupt as exc:
+            self._update_fit(running=False, phase=None, error=str(exc))
+            LOGGER.info("Enrolement interrompu a la demande.")
+        except Exception as exc:  # remonté tel quel dans la page
+            LOGGER.exception("Enrolement interrompu")
+            self._update_fit(running=False, phase=None, error=str(exc))
+        finally:
+            self._update(filming=False)
+            os.environ.pop("SCENE_PATH", None)
+            if capture is not None:
+                capture.release()
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def _apercu(self, frame, restant, images):
+        """Vignette d'enrôlement, décompte incrusté. L'incrustation n'est pas
+        enregistrée : la banque ne doit contenir que la scène."""
+        vue = frame.copy()
+        cv2.rectangle(vue, (0, 0), (vue.shape[1], 58), (24, 24, 24), -1)
+        cv2.putText(vue, "ENROLEMENT  {:>2}s   {} images".format(
+            max(int(restant + 0.999), 0), images),
+            (16, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2)
+        ok, buf = cv2.imencode(".jpg", vue, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if ok:
+            with self._lock:
+                self._jpeg = buf.tobytes()
+
+    def _construire_banque(self, staging, params, t0, available):
+        """<staging>/normal/ -> banque -> coresets/<nom>.pkg. Renvoie le .pkg.
+
+        Commun au fit depuis un zip et à l'enrôlement caméra : les deux ne
+        diffèrent que par la façon dont les images arrivent dans staging.
+        """
+        # Le nom dit ce qui est vraiment entré : 20 000 demandés sur 400 images
+        # donnent ts400. Le plafond s'applique même sans demande.
+        subset = min(params["train_subset"] or available, available, FIT_MAX_IMAGES)
+        # Rien d'écarté : tsall plutôt qu'un ts<n> qui ferait croire à un tirage.
+        subset = None if subset >= available else subset
+
+
+        def progress(phase, done, total):
+            if self._stop.is_set():
+                raise KeyboardInterrupt("Fit interrompu.")
+            self._update_fit(
+                phase=phase, done=done, total=total,
+                seconds=time.perf_counter() - t0,
+            )
+
+        # SCENE lit SCENE_PATH ; `source` le réinscrit pour l'inférence.
+        os.environ["SCENE_PATH"] = staging
+        bank_dir = run_fit(
+            SCENE, models_dir=staging, coreset_pct=FIT_DEFAULT_CORESET_PCT,
+            extra_config={"source": staging, "task": params["task"],
+                          "dataset": params["dataset"]},
+            progress=progress, random_subset=True,
+            # Pas de workers : leur spawn réimporte le module du serveur sur macOS.
+            num_workers=0,
+            overrides={
+                "backbone_name": params["backbone"],
+                "layers_to_extract_from": params["layers"],
+                "coreset_pct": params["coreset_pct"],
+                "train_subset": subset,
+            },
+        )
+
+        self._update_fit(phase="empaquetage", done=0, total=0)
+        with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
+            config = json.load(fh)
+        name = patchcore.packaging.build_name(config, params["task"])
+        pkg_path = patchcore.packaging.pack(bank_dir, os.path.join(CORESETS_DIR, name))
+
+        # Images déplacées après le .pkg : un fit raté ne laisse pas de dossier orphelin.
+        images_dir = os.path.join(CORESETS_DIR, name[: -len(patchcore.packaging.SUFFIX)])
+        shutil.rmtree(images_dir, ignore_errors=True)
+        shutil.rmtree(os.path.join(staging, os.path.basename(bank_dir)),
+                      ignore_errors=True)
+        os.replace(staging, images_dir)
+        staging = None
+
+        # trained < images : FolderDataset garde 20 % hors banque.
+        self._update_fit(
+            running=False, phase="terminé", name=name,
+            trained=config.get("n_train_images"),
+            seconds=time.perf_counter() - t0,
+        )
+        return pkg_path
 
     def _run(self, params):
         capture = None
@@ -837,7 +995,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         last = None
         try:
-            while RUNNER.state()["running"]:
+            # `filming` couvre l'enrôlement : la caméra tourne, rien n'est
+            # encore scoré, et c'est justement là qu'il faut voir ce qu'on enrôle.
+            etat = RUNNER.state()
+            while etat["running"] or etat.get("filming"):
+                etat = RUNNER.state()
                 jpeg = RUNNER.jpeg()
                 if jpeg is None or jpeg is last:
                     time.sleep(0.02)  # rien de neuf, ne pas réémettre
@@ -1028,6 +1190,62 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": err}, 400)
                     return
             ok, err = RUNNER.start(params)
+            self._json({"ok": ok, "error": err})
+        elif self.path == "/api/online":
+            # Enrôler puis scorer d'un seul geste : mêmes réglages que /api/start,
+            # plus ceux du fit, plus la durée de prise. Pas d'archive, donc du JSON.
+            try:
+                p = json.loads(raw)
+                params = {
+                    "source": str(p.get("source", "0")),
+                    "duree_s": float(p.get("duree_s") or ENROL_SECONDES),
+                    "images_par_s": float(p.get("images_par_s") or ENROL_IMAGES_PAR_S),
+                    "task": patchcore.packaging.slugify(str(p.get("task", ""))),
+                    "dataset": clean_dataset(str(p.get("dataset", ""))),
+                    "backbone": str(p.get("backbone") or FIT_BACKBONES[0]),
+                    "layers": [l for l in (p.get("layers") or FIT_DEFAULT_LAYERS)
+                               if l in FIT_LAYERS],
+                    "coreset_pct": float(p.get("coreset_pct") or FIT_DEFAULT_CORESET_PCT),
+                    "train_subset": int(p.get("train_subset") or 0),
+                    "stride": max(1, int(p.get("stride") or 1)),
+                    "zoom": clamp_zoom(p.get("zoom") or 1.0),
+                    "vmax": float(p.get("vmax") or HEATMAP_VMAX),
+                    "alpha": HEATMAP_ALPHA if p.get("alpha") is None
+                             else clamp_alpha(p["alpha"]),
+                    "smoothing": (p.get("smoothing")
+                                  if p.get("smoothing") in SMOOTHING_MODES else "none"),
+                    "smoothing_seconds": clamp_seconds(
+                        p.get("smoothing_seconds") or SMOOTHING_SECONDS),
+                    "norm": p.get("norm") if p.get("norm") in NORM_MODES else "banque",
+                    "loop": bool(p.get("loop")),
+                    "device": str(p.get("device") or "auto"),
+                    "faiss_threads": max(1, int(p.get("faiss_threads") or FAISS_NUM_WORKERS)),
+                    "faiss_gpu": bool(p.get("faiss_gpu")),
+                }
+            except (ValueError, KeyError, TypeError) as exc:
+                self._json({"error": "Paramètres invalides : {}".format(exc)}, 400)
+                return
+            if params["backbone"] not in FIT_BACKBONES:
+                self._json({"error": "Backbone inconnu : {}".format(params["backbone"])}, 400)
+                return
+            if not params["layers"]:
+                self._json({"error": "Aucune couche valide."}, 400)
+                return
+            if not 0 < params["coreset_pct"] <= 1:
+                self._json({"error": "Taux de coreset hors de ]0, 1]."}, 400)
+                return
+            # Bornes larges, mais une prise de deux heures remplirait le disque et
+            # une prise d'une seconde ne définirait rien.
+            if not 2.0 <= params["duree_s"] <= 600.0:
+                self._json({"error": "Durée d'enrôlement hors de [2 s, 600 s]."}, 400)
+                return
+            if not 0.5 <= params["images_par_s"] <= 30.0:
+                self._json({"error": "Images par seconde hors de [0,5 ; 30]."}, 400)
+                return
+            if params["device"].split(":")[0] not in ("auto", "cpu", "cuda"):
+                self._json({"error": "Device inconnu : {}".format(params["device"])}, 400)
+                return
+            ok, err = RUNNER.start_online(params)
             self._json({"ok": ok, "error": err})
         elif self.path == "/api/stop":
             RUNNER.stop()

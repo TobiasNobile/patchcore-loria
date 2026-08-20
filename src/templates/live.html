@@ -50,12 +50,24 @@
           <span>Archive zip</span></label>
         <label class="check"><input type="radio" name="srcmode" value="dir">
           <span>Dossier d'images</span></label>
+        <label class="check"><input type="radio" name="srcmode" value="online">
+          <span>Filmer maintenant</span></label>
       </div>
       <input id="archive" type="file" accept=".zip,application/zip">
       <!-- webkitdirectory : le navigateur ne livre jamais de chemin, seulement
            les fichiers. La page en fait un zip avant l'envoi, ce qui reprend le
            même trajet côté serveur. -->
       <input id="folder" type="file" webkitdirectory multiple hidden>
+
+      <!-- Mode online : la caméra tient lieu de jeu d'images. On filme la scène
+           telle qu'elle doit être, et le scoring enchaîne sur la banque obtenue. -->
+      <div class="pair" id="onlinefields" hidden>
+        <label for="duree_s">Durée de prise<small>secondes filmées</small></label>
+        <label for="images_par_s">Images / s<small>deux frames voisines
+          n'apprennent rien de neuf</small></label>
+        <input id="duree_s" type="number" min="2" max="600" step="1" value="20">
+        <input id="images_par_s" type="number" min="0.5" max="30" step="0.5" value="5">
+      </div>
 
       <div class="actions">
         <button id="dofit" type="submit">Fitter</button>
