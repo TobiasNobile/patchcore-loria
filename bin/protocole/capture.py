@@ -70,6 +70,24 @@ def _bandeau(image, condition, consigne, restant, total_restant):
     return vue
 
 
+def _cadence_reelle(capture, annonce, frames=60):
+    """Cadence effective, mesurée sur les premières frames."""
+    t0 = time.perf_counter()
+    lues = 0
+    for _ in range(frames):
+        if not capture.read()[0]:
+            break
+        lues += 1
+    ecoule = time.perf_counter() - t0
+    if lues < 10 or ecoule <= 0:
+        return annonce
+    mesure = lues / ecoule
+    if abs(mesure - annonce) > 0.15 * annonce:
+        print("  cadence annoncee {:.0f} fps, mesuree {:.0f} : on garde la mesuree."
+              .format(annonce, mesure))
+    return round(mesure)
+
+
 @click.command()
 @click.option("--nom", required=True, help="Nom du clip, sans extension.")
 @click.option("--source", default="0", show_default=True,
@@ -96,8 +114,12 @@ def main(nom, source, out, rapide, enrolement_par_s, show):
 
     os.makedirs(out, exist_ok=True)
     chemin = os.path.join(out, nom + ".mp4")
+    # Le fps annoncé n'engage pas la caméra : la mienne annonce 15 et en délivre
+    # 30, ce qui encode un fichier joué au ralenti et décale toute la timeline.
+    # On le mesure sur quelques frames avant d'ouvrir l'encodeur.
+    fps = fps_nominal if fichier else _cadence_reelle(capture, fps_nominal)
     writer = cv2.VideoWriter(chemin, cv2.VideoWriter_fourcc(*"mp4v"),
-                             fps_nominal, (largeur, hauteur))
+                             fps, (largeur, hauteur))
 
     print("\n  {} — {:.0f} s, {}x{} à {:.0f} fps".format(chemin, total, largeur, hauteur, fps_nominal))
     print("  La camera ne doit PAS bouger de tout le clip : un mouvement de camera")
@@ -192,6 +214,7 @@ def main(nom, source, out, rapide, enrolement_par_s, show):
         "clip": chemin,
         "largeur": largeur, "hauteur": hauteur,
         "fps_nominal": round(fps_nominal, 3),
+        "fps_conteneur": round(fps, 3),
         # Une webcam ne tient pas son fps annoncé : c'est le mesuré qui convertit
         # un numéro de frame en seconde, donc qui aligne les labels sur les scores.
         "fps_mesure": round(frames / ecoule, 3) if ecoule else 0.0,

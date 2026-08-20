@@ -1,0 +1,57 @@
+{
+  "source": "data/protocole/scene1_enrolement",
+  "task": "Protocole",
+  "seed": 0,
+  "train_subset": null,
+  "backbone_name": "wideresnet50",
+  "layers_to_extract_from": [
+    "layer2",
+    "layer3"
+  ],
+  "pretrain_embed_dimension": 1024,
+  "target_embed_dimension": 1024,
+  "patchsize": 3,
+  "anomaly_scorer_num_nn": 1,
+  "sampler_name": "approx_greedy_coreset",
+  "coreset_pct": 0.1,
+  "coreset_proj_dim": 128,
+  "imagesize": 224,
+  "resize": 256,
+  "faiss_on_gpu": false,
+  "nominal_scores": {
+    "n_images": 45,
+    "patch": {
+      "median": 0.33100754022598267,
+      "mad": 0.06948387622833252,
+      "sigma": 0.1030167948961258,
+      "q90": 0.506705915927887,
+      "q99": 1.6004051887989046,
+      "q999": 3.052435853004376,
+      "min": 0.05369102954864502,
+      "max": 3.5126938819885254,
+      "n": 2257920
+    },
+    "image": {
+      "median": 0.7180671691894531,
+      "mad": 0.05590629577636719,
+      "sigma": 0.08288667411804199,
+      "q90": 1.8828495025634768,
+      "q99": 3.9505949401855474,
+      "q999": 4.056691078186036,
+      "min": 0.6325263977050781,
+      "max": 4.068479537963867,
+      "n": 45
+    }
+  },
+  "device": "cpu",
+  "node": "eduroam-64-60.loria.fr",
+  "cluster": "eduroam",
+  "gpu_name": "cpu",
+  "torch_version": "2.12.1",
+  "n_train_images": 181,
+  "memory_bank_size": 14190,
+  "feature_dim": 1024,
+  "bank_gb": 0.05413055419921875,
+  "peak_rss_gb": 2.6193695068359375,
+  "fit_seconds": 34.67630337499941
+}
