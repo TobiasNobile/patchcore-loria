@@ -70,7 +70,7 @@ CORESETS_DIR = os.environ.get("PATCHCORE_CORESETS_DIR") or os.path.join(
 # Backbones proposés au fit, du plus lourd au plus rapide.
 FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
 FIT_LAYERS = ("layer1", "layer2", "layer3", "layer4")
-FIT_DEFAULT_LAYERS = ("layer2", "layer3")
+FIT_DEFAULT_LAYERS = ("layer3", "layer4")
 FIT_DEFAULT_CORESET_PCT = 0.01
 # Plafond du nombre d'images retenues pour la banque, quoi qu'on envoie : la
 # sélection du coreset est quadratique en nombre de patchs, 20 000 images

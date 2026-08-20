@@ -116,6 +116,10 @@ input[type=file] { padding: 6px; font-size: 12px; }
 #fitbar { height: 6px; border-radius: 3px; background: var(--line);
           overflow: hidden; margin-top: 10px; }
 #fitbar[hidden] { display: none; }
+/* Même piège que plus bas : .pair et .checks posent un `display`, qui l'emporte
+   sur l'attribut [hidden]. Sans ces deux règles, les réglages du mode online
+   restent visibles quel que soit le mode choisi. */
+#onlinefields[hidden], #storefield[hidden] { display: none; }
 #fitfill { height: 100%; width: 0; background: var(--ink); transition: width .3s; }
 #fitfill.pending { animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
