@@ -186,17 +186,9 @@
       <input id="zoom" class="live" type="number" min="1" max="8" step="0.1" value="1">
     </div>
 
-    <div class="pair">
-      <label for="norm">Unité du score<small>brute, ou en écarts robustes</small></label>
-      <label for="vmax">Valeur max de la heatmap<small>conseillé
-        <span id="vmaxhint">—</span></small></label>
-      <select id="norm" class="live">
-        <option value="banque">écarts · mesurés au fit</option>
-        <option value="fenetre">écarts · 20 s glissantes</option>
-        <option value="none">distance brute</option>
-      </select>
-      <input id="vmax" class="live" type="number" min="0.5" step="0.5" value="10">
-    </div>
+    <label for="vmax">Valeur max de normalisation de la heatmap<small>conseillé
+      <span id="vmaxhint">—</span></small></label>
+    <input id="vmax" class="live" type="number" min="1" step="1" value="10">
 
   </section>
 </main>
