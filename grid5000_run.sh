@@ -11,7 +11,8 @@
 #   ./grid5000_run.sh --fetch           # rapatrie un job détaché terminé
 #
 # Env : OAR_RESOURCES, OAR_WALLTIME, OAR_PROPERTIES (ex. cluster='gres'),
-#       REMOTE_ENV (variables passées au script distant).
+#       REMOTE_ENV (variables passées au script distant),
+#       EXTRA_EXCLUDES (chemins à ne pas envoyer, séparés par des espaces).
 #
 set -euo pipefail
 
@@ -68,11 +69,23 @@ fi
 SCRIPT_ARGS=("$@")
 
 # Mêmes exclusions que remote_run.sh. `models` exclu dans les deux sens : les
-# banques se construisent et se consomment sur le serveur.
-EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'mlruns' --exclude 'results'
+# banques se construisent et se consomment sur le serveur. `coresets` aussi, et
+# pour une raison de plus : ce sont les banques empaquetées de la page de démo,
+# qui ne tourne jamais ici — un seul .pkg y monte à 3 Go, soit un huitième du
+# quota du /home poussé à travers la passerelle pour rien.
+EXCLUDES=(--exclude '.venv' --exclude '.git' --exclude 'models' --exclude 'coresets'
+          --exclude 'mlruns' --exclude 'results'
           --exclude 'mlruns.db' --exclude 'mlflow.db' --exclude 'mlruns.db.bak-*'
           --exclude 'mlruns_remote' --exclude 'mlruns_remote.db' --exclude 'mlruns_array'
           --exclude '.mlflow_import' --exclude '__pycache__' --exclude '.pytest_cache')
+
+# `data/` n'est pas exclu par défaut : un fit de scène lit data/scene sur le nœud.
+# Mais un job COCO ou CelebA télécharge ses images lui-même, et pousser un dossier
+# d'images sur la frontale mange le quota du /home pour rien. D'où ce cran :
+#   EXTRA_EXCLUDES="data results/coco" ./grid5000_run.sh ...
+for motif in ${EXTRA_EXCLUDES:-}; do
+  EXCLUDES+=(--exclude "${motif}")
+done
 
 # Alias défini par la config SSH ci-dessus : il traverse la passerelle tout seul.
 G5K_HOST="${G5K_SITE}.g5k"
@@ -225,7 +238,13 @@ exit 0
 REMOTE_SCRIPT
 
 # ─── 3. Sync : frontale → local (rapatrie les outputs) ────────────────────
-# En mode détaché on s'est déjà arrêté plus haut : le job n'a rien produit encore.
+# Le `exit 0` du mode détaché est dans le heredoc : c'est le shell *distant*
+# qu'il arrête, pas celui-ci, qui enchaînait donc sur un rapatriement de
+# résultats qu'aucun job n'a encore produits — et sur un import MLflow pour rien.
+if [[ "${DETACH}" == "true" ]]; then
+  exit 0
+fi
+
 fetch_results
 
 echo "Terminé."
