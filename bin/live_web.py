@@ -507,7 +507,7 @@ class Runner:
                     prochaine += intervalle
                     self._update_fit(done=int(ecoule), images=images,
                                      seconds=time.perf_counter() - t0)
-                self._apercu(frame, duree - ecoule, images)
+                self._apercu(frame)
 
             capture.release()
             capture = None
@@ -548,15 +548,16 @@ class Runner:
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
 
-    def _apercu(self, frame, restant, images):
-        """Vignette d'enrôlement, décompte incrusté. L'incrustation n'est pas
-        enregistrée : la banque ne doit contenir que la scène."""
-        vue = frame.copy()
-        cv2.rectangle(vue, (0, 0), (vue.shape[1], 58), (24, 24, 24), -1)
-        cv2.putText(vue, "FILMAGE  {:>2}s   {} images".format(
-            max(int(restant + 0.999), 0), images),
-            (16, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2)
-        ok, buf = cv2.imencode(".jpg", vue, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    def _apercu(self, frame):
+        """Vignette d'enrôlement, telle quelle.
+
+        Le décompte y était incrusté, dans un bandeau de 58 px prévu pour le
+        grand carré. La page l'affiche dans un cadre de 160 px : le bandeau y
+        tombe à neuf pixels et le texte à trois, soit une barre noire et rien à
+        lire. Le décompte vit dans la ligne d'état, sous la barre d'avancement,
+        où il reste lisible et où il ne coûte pas un dixième de l'aperçu.
+        """
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if ok:
             with self._lock:
                 self._jpeg = buf.tobytes()

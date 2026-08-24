@@ -13,9 +13,17 @@ Le nom de sortie est déduit du fit_config : <Backbone>_<Tache>_<couches>_<cores
 import json
 import logging
 import os
+import platform
 import sys
 
-import click
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à s'initialiser
+# fait abort. Même parade qu'ailleurs dans le dépôt, à poser avant les imports qui
+# tirent l'un ou l'autre — ce script n'en fait qu'un zip, mais patchcore.packaging
+# passe par patchcore.banks, donc par les deux.
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+import click  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
