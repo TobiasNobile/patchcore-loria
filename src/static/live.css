@@ -82,6 +82,19 @@ label.check input { width: auto; margin-top: 2px; flex: none; }
 /* Couches du backbone : cases courtes, alignées sur une ligne si ça tient. */
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 9px; }
 
+/* Aide qui doit être lue, pas seulement disponible : encadrée et en encre
+   normale, là où les <small> des autres champs restent en gris clair. Une
+   colonne par membre — ce qu'on cherche, les couches à cocher — pour que les
+   deux flèches s'alignent et que la table se lise d'un coup d'œil. */
+.guide {
+  display: grid; grid-template-columns: max-content max-content;
+  gap: 2px 8px; margin: -4px 0 9px; padding: 6px 9px; font-size: 11.5px;
+  border: 1px solid var(--line); border-left: 3px solid var(--ink);
+  border-radius: 6px; background: var(--panel); color: #374151;
+}
+.guide b { font-weight: 600; color: var(--ink); }
+.guide b::before { content: "→ "; color: var(--faint); font-weight: 400; }
+
 /* Liste des sources acceptées, replié par défaut : une ligne tant qu'on ne
    clique pas, donc rien de gagné sur la hauteur d'écran. La marge négative
    rattrape celle du champ au-dessus. */
@@ -207,6 +220,7 @@ button:disabled { opacity: .35; cursor: default; }
   label { margin-bottom: 2px; }
   .formats { margin-bottom: 6px; }
   label + input, label + select, label + .slider, .pair, .checks { margin-bottom: 5px; }
+  .guide { margin: -2px 0 5px; padding: 4px 7px; font-size: 10.5px; }
   label.check { margin-bottom: 6px; }
   label small { font-size: 10px; }
   input, select { padding: 4px 8px; }
