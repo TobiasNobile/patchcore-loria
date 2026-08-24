@@ -188,12 +188,20 @@ CPU (Apple M-series, torch 4 threads / faiss 1) :
 
 | backbone | taille | coreset | banque | preprocess | embed | faiss | post | encode | scoring | FPS | AUROC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| wideresnet50 | 224 px | p0.005 | 19 600 | 2,5 ms | 54,5 ms | 16,4 ms | 2,7 ms | 1,0 ms | 76,2 ms | 12,9 | 0,6321 |
 | wideresnet50 | 224 px | p0.01 | 39 200 | 2,3 ms | 54,2 ms | 26,8 ms | 3,9 ms | 1,0 ms | 87,2 ms | 11,3 | 0,6375 |
 | wideresnet50 | 224 px | p0.02 | 78 400 | 2,5 ms | 58,6 ms | 54,2 ms | 0,0 ms | 0,9 ms | 115,3 ms | 8,6 | 0,6395 |
 | wideresnet50 | 224 px | p0.05 | 196 000 | 2,4 ms | 52,7 ms | 133,4 ms | 2,4 ms | 1,0 ms | 190,9 ms | 5,2 | 0,6406 |
 | resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
 | resnet18 | 160 px | p0.01 | 20 000 | 2,2 ms | 8,8 ms | 10,4 ms | 0,8 ms | 0,6 ms | 22,2 ms | 43,9 | 0,5388 |
 | resnet18 | 224 px | p0.005 | 19 600 | 2,4 ms | 12,9 ms | 13,6 ms | 2,0 ms | 1,0 ms | 30,9 ms | 31,4 | 0,4855 |
+
+Le coreset butte vite : diviser la banque par cinq (p0.05 → p0.01) rend 6,1 FPS,
+la diviser encore par deux n'en rend plus que 1,6. Le temps faiss n'est pas tout
+à fait proportionnel — 16,4 ms à 19 600 vecteurs contre 26,8 à 39 200 — il porte
+un coût fixe d'environ 6 ms. Et surtout le backbone, lui, ne bouge pas : ses
+54 ms font désormais les trois quarts du budget. À 224 px sur wideresnet50, même
+une banque vide plafonnerait vers 17 FPS.
 
 Alléger le backbone achète des FPS et coûte de l'AUROC, jusqu'à tomber au niveau
 du hasard : resnet18 à 224 px est à 0,4855, soit sous 0,5. Les seules configurations
