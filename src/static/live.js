@@ -79,7 +79,28 @@ function readParams() {
 // dépend aussi du backbone et de la taille d'image. Une paire [min, max] là où
 // la plage utile est trop large pour se réduire à un point ; le champ est
 // pré-rempli avec sa borne basse.
-const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 15, "l3-l4": [175, 200] };
+const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 10, "l3-l4": [150, 200] };
+
+// Vrai pendant le scoring. Le champ vmax ne se laisse pré-remplir qu'à l'arrêt :
+// en marche, la valeur affichée est celle que l'utilisateur a réglée à l'œil, et
+// la réécrire changerait l'image sous ses yeux. Ce n'est pas `vmax.disabled` qui
+// le dit — le champ est .live, donc jamais figé par le scoring, seulement par un
+// fit, moment où au contraire il faut le remettre à jour.
+let RUNNING = false;
+
+// Les couches, écrites comme la banque les nomme : layer3 -> l3.
+const layerKey = (layers) => layers.map((l) => l.replace("layer", "l")).join("-");
+
+// Une seule écriture du couple aide + champ, appelée aussi bien par la banque
+// choisie que par les cases du fit : le vmax utile ne dépend que des couches, et
+// il vaut mieux qu'il suive celles qu'on s'apprête à scorer.
+function showVmaxHint(layers) {
+  const hint = VMAX_HINT[layers];
+  const range = hint === undefined ? null : [].concat(hint);
+  $("vmaxhint").textContent = range
+    ? `${range.join("–")} pour ${layers}` : "inconnu pour " + (layers || "?");
+  if (range && !RUNNING) $("vmax").value = range[0];
+}
 
 // ─── Bandeau de banque ─────────────────────────────────────────────────────
 function showBank(dir) {
@@ -108,13 +129,7 @@ function showBank(dir) {
     .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${esc(v)}</b></div>`)
     .join("");
 
-  const hint = VMAX_HINT[m.layers];
-  const range = hint === undefined ? null : [].concat(hint);
-  $("vmaxhint").textContent = range
-    ? `${range.join("–")} pour ${m.layers}` : "inconnu pour " + (m.layers || "?");
-  // Pré-remplit tant que la boucle ne tourne pas : en cours, l'utilisateur a
-  // peut-être déjà ajusté à la main.
-  if (range && !$("vmax").disabled) $("vmax").value = range[0];
+  showVmaxHint(m.layers);
 }
 
 function fillBanks(banks, keep) {
@@ -418,6 +433,7 @@ $("snap").addEventListener("click", async () => {
 let lastFitName = null;
 
 function apply(s) {
+  RUNNING = !!s.running;
   // Le flux MJPEG se termine avec la boucle : on rebranche le <img> à chaque
   // démarrage, avec une URL unique sinon le navigateur ressert la réponse close.
   const cam = $("cam");
@@ -519,6 +535,11 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   $("layers").innerHTML = cfg.layers.map((l) => `
     <label class="check"><input type="checkbox" value="${l}"
       ${cfg.default_layers.includes(l) ? "checked" : ""}><span>${l}</span></label>`).join("");
+  // Après le remplissage des cases, sinon il n'y a rien à écouter. Cocher
+  // layer4 change l'échelle des scores d'un facteur ~25 : sans ce rappel, le
+  // champ garde le vmax de la banque précédente et la heatmap sort uniforme.
+  $("layers").addEventListener("change",
+                               () => showVmaxHint(layerKey(selectedLayers())));
   $("coreset_pct").value = cfg.default_coreset_pct;
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
