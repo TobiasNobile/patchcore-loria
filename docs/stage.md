@@ -7,6 +7,10 @@ calcul distant, et les résultats mesurés avec.
 
 ## Ce que cette branche ajoute
 
+La version minimale n'a qu'un exécutable, `main.py`, et pas de `bin/` : les
+scripts ci-dessous n'existent que sur `stage`. Les deux derniers de `bin/`
+partagent le scoring de la page via `live.scoring`, ils n'en refont pas une copie.
+
 ```
 bin/
   celeba/  fit/memory_bank.py  infer/{heatmap,histogram}.py  fit_and_score.sh
@@ -15,6 +19,8 @@ bin/
   scene/   fit/memory_bank.py  infer/histogram.py    # les mêmes, sur une scène filmée
   capture.py                # intervallomètre webcam -> data/scene/normal
   pack_bank.py              # models/<tag>/ -> coresets/<nom>.pkg
+  live_camera.py            # le scoring de la page, en fenêtre OpenCV
+  bench_live.py             # coût d'une frame, étape par étape
 src/
   experiments/benchmarks.py       # les specs CELEBA et COCO
   experiments/reports.py          # histogramme et heatmaps : relire une banque

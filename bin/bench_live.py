@@ -15,21 +15,19 @@ import time
 if platform.system() == "Darwin":
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import numpy as np
 
-# live_camera d'abord : il importe torch avant faiss (cf. live_web.py).
-from live_camera import (  # isort: skip
+# live.scoring d'abord : il importe torch avant faiss (cf. live/server.py).
+from live.scoring import (  # isort: skip
     FAISS_NUM_WORKERS,
     FAISS_ON_GPU,
     build_transform,
     preprocess,
-    select_device,
-    tune_faiss_small_batches,
 )
 
 import torch
+
+from experiments.runtime import select_device, tune_faiss_small_batches
 
 import patchcore.banks
 import patchcore.utils

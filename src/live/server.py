@@ -12,7 +12,6 @@ import logging
 import os
 import platform
 import shutil
-import sys
 import tempfile
 import threading
 import time
@@ -23,15 +22,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 if platform.system() == "Darwin": # equivalent à "est-ce que ça tourne sur MacOS"
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
-import click
 import cv2
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# live_camera d'abord : torch avant faiss, sinon abort libomp.
-from live_camera import (  # isort: skip
+# live.scoring d'abord : il pose la parade libomp puis importe torch, et l'ordre
+# inverse — faiss avant torch — fait abort sur macOS.
+from live.scoring import (  # isort: skip
     FAISS_NUM_WORKERS,
+    FAISS_ON_GPU,
     HEATMAP_VMAX,
     HEATMAP_VMIN,
     SMOOTHING_MODES,
@@ -41,11 +39,7 @@ from live_camera import (  # isort: skip
     calculer_nb_heatmaps,
     build_transform,
     preprocess,
-    resolve_device,
-    tune_faiss_small_batches,
 )
-
-from live_camera import FAISS_ON_GPU  # noqa: E402  défaut de la case à cocher
 
 import patchcore.banks
 import patchcore.common
@@ -54,15 +48,18 @@ import patchcore.uploads
 import patchcore.utils
 from experiments.datasets import SCENE
 from experiments.pipelines import run_fit
+from experiments.runtime import resolve_device, tune_faiss_small_batches
 
 LOGGER = logging.getLogger(__name__)
 
 # Chemins absolus, déduits de l'emplacement du fichier : la page se sert et les
 # banques se trouvent identiquement, quel que soit le répertoire d'où le serveur
-# a été lancé.
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATES_DIR = os.path.join(_ROOT, "src", "templates")
-STATIC_DIR = os.path.join(_ROOT, "src", "static")
+# a été lancé. Ce module vit dans src/live/, d'où deux remontées jusqu'à src/ et
+# une troisième jusqu'à la racine du dépôt.
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(_SRC)
+TEMPLATES_DIR = os.path.join(_SRC, "templates")
+STATIC_DIR = os.path.join(_SRC, "static")
 CORESETS_DIR = os.environ.get("PATCHCORE_CORESETS_DIR") or os.path.join(
     _ROOT, patchcore.packaging.CORESETS_DIR
 )
@@ -1192,11 +1189,13 @@ def _balayer_incomplets():
             LOGGER.info("Dossier de travail orphelin supprimé : %s", nom)
 
 
-@click.command()
-@click.option("--host", default="127.0.0.1", show_default=True,
-              help="Loopback par défaut : la page n'a aucune authentification.")
-@click.option("--port", default=8000, show_default=True)
-def main(host, port):
+def serve(host="127.0.0.1", port=8000):
+    """Sert la page et score, jusqu'à ctrl-c. Appelé par main.py, à la racine.
+
+    Le serveur HTTP part sur un thread de fond et le scoring garde le thread
+    principal : c'est le seul où torch est sûr sur macOS.
+    """
+    logging.basicConfig(level=logging.INFO)
     _balayer_incomplets()
     server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -1209,8 +1208,3 @@ def main(host, port):
         RUNNER.stop()
         server.shutdown()
         server.server_close()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    main()

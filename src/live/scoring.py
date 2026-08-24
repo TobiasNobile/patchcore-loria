@@ -1,0 +1,108 @@
+"""Ce qui se passe sur une frame : prétraitement, agrégation, réglages faiss.
+
+Séparé de `live.server`, qui n'en fait qu'un usage : le serveur orchestre des
+requêtes et des threads, ces fonctions-ci ne connaissent qu'une image et une
+banque. C'est aussi ce qui reste utilisable sans serveur du tout.
+"""
+
+import os
+import platform
+
+# macOS : torch et faiss embarquent chacun leur libomp, la seconde à
+# s'initialiser fait abort. À poser avant l'import de torch, donc avant tout le
+# reste — ce module est le premier de `live` à en tirer un.
+if platform.system() == "Darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+import cv2
+import numpy as np
+import torch  # noqa: F401  avant patchcore/faiss : l'ordre inverse fait abort libomp
+from PIL import Image
+from torchvision import transforms
+
+# Échelle fixe : un autoscale par image ferait clignoter la heatmap.
+HEATMAP_VMIN = 0.0
+HEATMAP_VMAX = 10.0
+
+# Profondeur des agrégations optionnelles, en frames scorées.
+# Le lissage se raisonne en temps de scène, pas en nombre de cartes : à stride 3
+# une carte sur trois est produite, donc dix cartes couvrent trois fois plus de
+# vidéo qu'à stride 1. On vise donc une durée fixe et on en déduit le nombre.
+SMOOTHING_SECONDS = 1 / 3
+SMOOTHING_FRAMES_MAX = 30   # borne mémoire : une carte 224x224 float32 = 200 Ko
+SMOOTHING_SECONDS_MAX = 5.0 # au-delà la tache survit si longtemps qu'on la croit figée
+DEFAULT_FPS = 30.0          # sources qui ne déclarent rien, webcams surtout
+SMOOTHING_MODES = ("none", "mean", "max")
+
+FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "yes")
+# Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault.
+FAISS_NUM_WORKERS = int(os.environ.get(
+    "INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
+
+
+def calculer_nb_heatmaps(fps, stride, seconds=SMOOTHING_SECONDS):
+    """Combien de cartes agréger pour couvrir `seconds` de scène.
+
+    Une carte tombe toutes les `stride` frames, soit toutes les stride/fps
+    secondes : n = fps * seconds / stride. À 30 fps et 1/3 s, ça fait 10 cartes
+    en stride 1 et 3 en stride 3 — la même tranche de vidéo dans les deux cas,
+    alors qu'un nombre fixe la triplerait.
+
+    `stride` est le stride *effectif* côté web : quand l'inférence ne suit pas,
+    des frames sont sautées pour tenir le temps réel, et l'espacement des cartes
+    est plus large que le stride demandé.
+    """
+    if not fps or fps <= 0 or fps > 240:
+        fps = DEFAULT_FPS   # 0 ou aberrant : CAP_PROP_FPS n'est pas fiable partout
+    n = round(fps * max(float(seconds), 0.0) / max(1.0, float(stride)))
+    return min(max(int(n), 1), SMOOTHING_FRAMES_MAX)
+
+
+def aggregate(values, mode):
+    """
+    Agrège les dernières valeurs scorées ; `none` rend la dernière telle quelle.
+    """
+    if not len(values):
+        return None
+    if mode == "mean":
+        return np.mean(values, axis=0)
+    if mode == "max":
+        return np.max(values, axis=0)
+    return values[-1]
+
+
+def build_transform(fit_config):
+    """Le prétraitement exact des datasets (celeba.py / coco.py), relu du fit."""
+    return transforms.Compose(
+        [
+            transforms.Resize(fit_config["resize"]),
+            transforms.CenterCrop(fit_config["imagesize"]),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+            ),
+        ]
+    )
+
+
+def preprocess(frame_bgr, transform, zoom):
+    """Frame OpenCV BGR -> (tenseur 1x3xHxW normalisé, vignette RGB affichable).
+
+    La vignette est la frame telle que le réseau la voit (même recadrage) : la
+    heatmap se superpose dessus sans réalignement approximatif.
+    """
+    if zoom > 1.0:
+        h, w = frame_bgr.shape[:2]
+        ch, cw = int(h / zoom), int(w / zoom)
+        top, left = (h - ch) // 2, (w - cw) // 2
+        frame_bgr = frame_bgr[top : top + ch, left : left + cw]
+
+    image = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    tensor = transform(image)
+
+    # Le même Resize+CenterCrop, mais sans normalisation, pour l'affichage.
+    size = tensor.shape[-1]
+    preview = transforms.functional.center_crop(
+        transforms.functional.resize(image, transform.transforms[0].size), size
+    )
+    return tensor.unsqueeze(0), np.asarray(preview)

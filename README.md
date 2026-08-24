@@ -20,11 +20,11 @@ rien n'appelait — `utils.py` se réduit à `fix_seeds`.
 sont des ajouts.
 
 **Ajouté** : l'interface web `main.py` (construire une banque depuis un zip
-d'images, puis scorer la webcam), le format de banque `coresets/*.pkg`, les
-pipelines de fit et d'inférence partagés dans `src/experiments/`, le fit sur une
-scène filmée sur place (`bin/capture.py`, `bin/scene/`), le scoring webcam en
-direct (`bin/live_camera.py`, `bin/live_web.py`), le banc de mesure d'une frame
-(`bin/bench_live.py`).
+d'images, puis scorer la webcam), dont le code vit dans `src/live/`, le format de
+banque `coresets/*.pkg`, et les pipelines de fit et d'inférence partagés dans
+`src/experiments/`. Le dépôt n'a qu'un exécutable : tout passe par `main.py`. Les
+scripts d'expérience — fit sur scène filmée, pipelines CelebA et COCO, banc de
+mesure d'une frame — vivent dans `bin/` sur la branche `stage`.
 
 **Deux versions.** Ceci est la version minimale : la démo et le cœur de
 PatchCore, sans dataset à télécharger ni serveur de calcul. La version complète
@@ -56,7 +56,7 @@ If you use the code in this repository, please cite
 ## Démarrage rapide
 
 ```shell
-bash bin/fetch_bank.sh    # la banque de démonstration, 153 Mo, hors du dépôt
+python main.py fetch-bank # la banque de démonstration, 153 Mo, hors du dépôt
 python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
 
@@ -112,7 +112,8 @@ au push tout fichier au-delà de 100 Mio — et un blob de cette taille resterai
 dans l'historique de chaque clone même après suppression. Les banques se
 distribuent donc en **asset de release** : un fichier attaché à une version
 publiée, hébergé à côté du dépôt et non dedans, que `git clone` ne rapatrie pas.
-C'est ce que va chercher `bin/fetch_bank.sh`, somme de contrôle à l'appui. Une
+C'est ce que va chercher `python main.py fetch-bank`, somme de contrôle à
+l'appui. Une
 petite banque peut toujours être committée pour de bon avec `git add -f`.
 
 La page empaquette elle-même à la fin d'un fit : le `.pkg` apparaît dans
@@ -146,19 +147,15 @@ Deux axes : le dataset, puis la phase. Le fit est la moitié coûteuse et hors-l
 et n'écrit que des figures et des mesures.
 
 ```
-main.py                     # l'interface web : fit + scoring live
+main.py                     # le seul exécutable : sert la page, ou fetch-bank
 coresets/<nom>.pkg          # banques empaquetées (gitignoré)
 coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
 
-bin/
-  fetch_bank.sh             # installe la banque de démonstration (release)
-  live_web.py               # l'app servie par main.py
-  live_camera.py            # fenêtre OpenCV, même scoring sans le navigateur
-  bench_live.py             # coût d'une frame, étape par étape
-
+src/live/server.py          # l'app servie par main.py : fit + scoring live
+src/live/scoring.py         # une frame : prétraitement, agrégation, faiss
 src/patchcore/              # le cœur : backbone, coreset, banque, scoring
 src/experiments/            # le fit, du Spec au .pkg
-src/templates/live.html     # la page servie par live_web.py
+src/templates/live.html     # la page servie par src/live/server.py
 src/static/live.{css,js}    # sa feuille de style et son script
 ```
 
@@ -167,24 +164,25 @@ Les scripts live déduisent de la banque où écrire leurs captures
 
 ## Rendu de la heatmap
 
-Trois constantes de `bin/live_web.py` gouvernent l'affichage, et donc les
+Trois constantes de `src/live/server.py` gouvernent l'affichage, et donc les
 captures. Aucune ne touche aux scores.
 
 | constante | rôle |
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
 | `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `bin/live_camera.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
+| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `src/live/scoring.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
 
 L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
 pas un voile bleu.
 
-## Cadence live — coût d'une frame (`bin/bench_live.py`)
+## Cadence live — coût d'une frame
 
 Banque « personne + couteau » (COCO, layer3 + layer4, 20 000 images de fit —
 construite dans la version complète). Budgets : 33,3 ms = 30 FPS, 16,7 ms = 60 FPS. `scoring`
-exclut l'encodage JPEG.
+exclut l'encodage JPEG. Mesuré avec le banc `bin/bench_live.py`, qui vit sur
+`stage` avec le reste des outils de mesure.
 
 CPU (Apple M-series, torch 4 threads / faiss 1) :
 
