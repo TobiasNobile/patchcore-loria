@@ -147,6 +147,16 @@
         <span>Boucler<small>rejouer un fichier sans fin</small></span>
       </label>
 
+      <!-- Sans classe .live : le device se choisit avant de démarrer, la banque
+           étant chargée sur celui-là. Un repli cuda -> cpu est silencieux côté
+           calcul, d'où le bandeau #notice que le serveur renseigne. -->
+      <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
+      <select id="device" name="device">
+        <option value="auto">auto</option>
+        <option value="cpu">cpu</option>
+        <option value="cuda">cuda</option>
+      </select>
+
       <div class="actions">
         <button id="start" type="submit">Démarrer</button>
         <button id="stop" type="button" class="secondary" disabled>Arrêter</button>
@@ -157,13 +167,6 @@
            donc INFER_FAISS_GPU / INFER_FAISS_THREADS restent effectifs, et
            readParams() continue de les envoyer. Retirer `hidden` les rend. -->
       <div id="advanced" hidden>
-        <label for="device">Calcul<small>auto = cuda si présent, sinon cpu</small></label>
-        <select id="device" name="device">
-          <option value="auto">auto</option>
-          <option value="cpu">cpu</option>
-          <option value="cuda">cuda</option>
-        </select>
-
         <label for="faiss_threads">Threads FAISS<small>cœurs pour la recherche</small></label>
         <input id="faiss_threads" name="faiss_threads" type="number" min="1" step="1" value="1">
 
