@@ -481,6 +481,23 @@ function apply(s) {
     $("placeholder").hidden = false;
   }
 
+  // Le filmage passe par le même flux MJPEG que le scoring, mais `running` est
+  // faux tant qu'on enrôle : sans ce cadre-là, on filme sa banque à l'aveugle.
+  // Il reste branché tant que le travail online dure, de sorte que la dernière
+  // frame tienne l'écran pendant le fit qui suit, et s'efface quand le grand
+  // carré prend le relais au scoring.
+  const film = $("filmframe");
+  if (s.filming && film.hidden) {
+    $("filmcam").src = "/stream.mjpg?" + Date.now();
+    film.hidden = false;
+    // Le panneau défile de son côté : sur une fenêtre courte, le cadre naît
+    // sous le bord et personne ne le voit — or il ne sert qu'à être regardé.
+    film.scrollIntoView({ block: "nearest" });
+  } else if (!s.filming && !film.hidden && (s.running || !(s.fit || {}).running)) {
+    film.hidden = true;
+    $("filmcam").removeAttribute("src");
+  }
+
   $("score").textContent =
     s.score === null || s.score === undefined ? "—" : s.score.toFixed(2);
   $("status").textContent = s.running ? "en cours" : "arrêté";
