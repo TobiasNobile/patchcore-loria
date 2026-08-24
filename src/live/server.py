@@ -85,9 +85,13 @@ ENROL_MIN_IMAGES = 20
 
 # Banque présélectionnée à l'ouverture de la page : sans elle, c'est la première
 # de coresets/ dans l'ordre alphabétique, qui n'a aucune raison d'être la bonne.
-# Comparaison par sous-chaîne sur le nom, pour survivre à un changement de
-# coreset ou de ts dans le nom du .pkg.
-DEFAULT_BANK = os.environ.get("LIVE_DEFAULT_BANK", "DetectionKnife_l3-l4")
+# Comparaison par sous-chaîne sur le nom, donc le motif doit désigner une seule
+# banque : `DetectionKnife_l3-l4` suffisait tant qu'il n'y en avait qu'une, mais
+# une variante de coreset a suffi à le rendre ambigu — et c'est la première dans
+# l'ordre alphabétique qui l'emportait, soit p0.005 avant p0.01. Le coreset fait
+# donc partie du motif ; c'est la banque que `main.py fetch-bank` installe et que
+# le README décrit.
+DEFAULT_BANK = os.environ.get("LIVE_DEFAULT_BANK", "DetectionKnife_l3-l4_p0.01")
 
 
 def default_bank_dir(banks):
