@@ -166,6 +166,9 @@ $("srcmode").addEventListener("change", () => {
   // En mode online il n'y a rien à envoyer : la caméra fournit les images, et le
   // scoring démarre tout seul sur la banque obtenue.
   $("dofit").textContent = mode === "online" ? "Filmer, fitter, démarrer" : "Fitter";
+  // En online, c'est la banque à venir qui sera scorée : le vmax conseillé est
+  // celui de ses couches, et non celui de la banque encore sélectionnée.
+  if (mode === "online") showVmaxHint(layerKey(selectedLayers()));
   $("fiterror").textContent = "";
 });
 
@@ -311,6 +314,12 @@ fitForm.addEventListener("submit", async (e) => {
   if (!layers.length) { $("fiterror").textContent = "Choisir au moins une couche."; return; }
 
   if (srcMode() === "online") {
+    // Le scoring démarre sur la banque qui va être construite, pas sur celle du
+    // sélecteur : le vmax du champ est encore celui de l'autre échelle, et
+    // personne n'a l'occasion de le corriger entre le fit et la première frame.
+    // On le recale ici, avant de lire les réglages — visible dans le champ, donc
+    // ajustable ensuite comme n'importe quel réglage à chaud.
+    showVmaxHint(layerKey(layers));
     // Un seul appel : la page n'a pas à orchestrer prise, fit et scoring, qui
     // occupent de toute façon le même thread côté serveur.
     $("fitstatus").textContent = "Filmage en cours…";
