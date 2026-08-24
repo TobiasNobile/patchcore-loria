@@ -13,6 +13,12 @@ mlruns.db.bak-*
 .env
 results
 
+# Le lock d'uv : 934 Ko qui rejouent des roues CUDA et des builds macOS pour un
+# dépôt qu'on installe sur trois plateformes différentes, et qui reconflit à
+# chaque relock. Les bornes qui comptent vivent dans pyproject.toml ; `uv sync`
+# le régénère en local.
+uv.lock
+
 # Images de scène et exports de datasets (bin/capture.py, tools/celeba_export.py)
 data/
 
