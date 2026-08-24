@@ -24,7 +24,12 @@
       <label for="backbone">Backbone<small>plus lourd = mieux séparé, moins fluide</small></label>
       <select id="backbone" name="backbone"></select>
 
-      <label>Couches<small>où extraire les features ; l3 seule sépare souvent le mieux</small></label>
+      <!-- Ce que la couche retient, plutôt qu'un classement : les couches basses
+           décrivent la matière, les hautes ce qu'on reconnaît. Choisir d'après
+           ce qu'on veut détecter est la seule règle qui tienne d'une scène à
+           l'autre. Le vmax conseillé suit ce choix, cf. VMAX_HINT dans live.js. -->
+      <label>Couches<small>motif ou texture → layer2 + layer3 · objet ou concept
+        → layer3 + layer4</small></label>
       <div id="layers" class="checks"></div>
 
       <!-- Deux champs courts sur une ligne : cf. .pair dans live.css. Les labels
@@ -84,7 +89,9 @@
          sans défiler. Ils restent .live, donc actifs pendant le scoring. -->
     <div id="stagecontrols">
       <label class="check">
-        <input id="smooth_max" class="live" type="checkbox">
+        <!-- Coché d'entrée : un objet traverse le champ en quelques frames, et
+             sans lissage la tache disparaît avant d'avoir été vue. -->
+        <input id="smooth_max" class="live" type="checkbox" checked>
         <!-- Le champ vit dans l'aide, à la place du nombre qu'il remplace : un
              clic dessus ne coche pas la case, un navigateur ne transmet pas
              l'activation d'un label à travers un contrôle imbriqué. -->
