@@ -24,13 +24,19 @@
       <label for="backbone">Backbone<small>plus lourd = mieux séparé, moins fluide</small></label>
       <select id="backbone" name="backbone"></select>
 
-      <!-- Ce que la couche retient, plutôt qu'un classement : les couches basses
-           décrivent la matière, les hautes ce qu'on reconnaît. Choisir d'après
-           ce qu'on veut détecter est la seule règle qui tienne d'une scène à
-           l'autre. Le vmax conseillé suit ce choix, cf. VMAX_HINT dans live.js. -->
-      <label>Couches<small>motif ou texture → layer2 + layer3 · objet ou concept
-        → layer3 + layer4</small></label>
+      <label>Couches</label>
       <div id="layers" class="checks"></div>
+      <!-- Sous les cases et non dans le <label> : c'est la table qu'on relit en
+           cochant, et une aide en gris clair posée avant le choix passait
+           inaperçue. Deux lignes plutôt qu'une phrase à séparateur — ce sont
+           deux cas, pas une énumération.
+           Ce que la couche retient, plutôt qu'un classement : les couches basses
+           décrivent la matière, les hautes ce qu'on reconnaît. Le vmax conseillé
+           suit ce choix, cf. VMAX_HINT dans live.js. -->
+      <div class="guide">
+        <span>motif ou texture</span><b>layer2 + layer3</b>
+        <span>objet ou concept</span><b>layer3 + layer4</b>
+      </div>
 
       <!-- Deux champs courts sur une ligne : cf. .pair dans live.css. Les labels
            sont alignés en bas pour que les champs restent sur la même ligne même
@@ -116,7 +122,7 @@
       <label for="bank_dir">Banque</label>
       <select id="bank_dir" name="bank_dir"></select>
 
-      <label for="source">Source<small>0 = webcam, ou fichier / URL</small></label>
+      <label for="source">Source<small>0 = webcam, ou un fichier</small></label>
       <input id="source" name="source" value="0">
       <!-- Un repli, pas un lien vers la doc OpenCV : la page tourne en local,
            souvent sans réseau, et hors du <label> pour qu'un clic n'aille pas
