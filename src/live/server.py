@@ -1182,11 +1182,14 @@ def _balayer_incomplets():
     Une banque non stockée vit dans coresets/.incoming-* le temps du scoring et
     disparaît avec lui — sauf si le serveur est arrêté brutalement, auquel cas
     elle s'accumule à côté des banques.
+
+    Silencieux : c'est du ménage que personne n'a demandé, et l'annoncer au
+    démarrage faisait passer pour un incident ce qui n'est qu'un dossier
+    temporaire ramassé.
     """
     for nom in os.listdir(CORESETS_DIR) if os.path.isdir(CORESETS_DIR) else []:
         if nom.startswith(".incoming-"):
             shutil.rmtree(os.path.join(CORESETS_DIR, nom), ignore_errors=True)
-            LOGGER.info("Dossier de travail orphelin supprimé : %s", nom)
 
 
 def serve(host="127.0.0.1", port=8000):
