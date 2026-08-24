@@ -88,6 +88,20 @@ coresets/WideResNet50_DetectionKnife_l3-l4_p0.01_ts20000.pkg
          backbone     tâche          couches coreset images de fit
 ```
 
+**D'où viennent ces images.** Rien n'a été filmé pour cette banque : elle est
+fittée sur **COCO 2017**, le jeu de photos annotées de Microsoft, récupéré depuis
+`images.cocodataset.org`. Le normal, c'est toute image contenant une personne et
+**aucun** couteau ; les images de personne **avec** couteau ne rentrent pas dans
+la banque, elles ne servent qu'à mesurer ce qui la sépare du reste. Cette
+banque-ci a pris 20 000 images des splits `train2017` et `val2017`, fittées sur
+un nœud Grid5000 — d'où le `ts20000` du nom.
+
+Une seconde banque, `DetectionKnifeVal2017_l3-l4_p0.005`, tient la même tâche à
+partir du seul `val2017` : 1 200 images de personne sans couteau, dont 960 dans
+la banque et 240 gardées hors banque pour le seuil, plus les 99 images à couteau
+du split. Elle se fitte en deux minutes sur un portable, là où les 20 000
+demandent un nœud — le nuage de features avant coreset ne tient pas en 16 Go.
+
 C'est un zip de ce qu'écrit le fit (index faiss, paramètres, `fit_config.json`).
 Le fichier de config reste la référence : le nom n'en est qu'un résumé, lisible
 sans ouvrir l'archive. À côté du `.pkg`, un dossier de même nom garde les images
