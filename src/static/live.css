@@ -145,9 +145,18 @@ button:disabled { opacity: .35; cursor: default; }
          min-height: 0; overflow-y: auto; }
 /* Taille prise sur la hauteur de fenêtre, pas sur la largeur de colonne : c'est
    la hauteur qui manque, et le carré doit laisser la place au score et aux deux
-   réglages sous lui. `min()` garde la colonne comme plafond. */
+   réglages sous lui. Aussi grand que ça le permet : la scène se lit de loin, et
+   une source basse définition étirée reste plus utile qu'une vignette nette —
+   d'où `image-rendering: pixelated` sur #cam.
+   Une soustraction plutôt qu'une fraction de la hauteur : ce qui vit sous le
+   carré (score, état, lissage, alpha) coûte une hauteur fixe. Un `58vh`
+   déborderait à 800 px de haut et gâcherait la place à 1200. `min()` garde la
+   colonne et 640 px comme plafonds.
+   Une variable, parce que les réglages sous la caméra se calent sur la même
+   largeur : deux valeurs se seraient désaccordées au premier changement. */
+#stage { --carre: min(100%, calc(100vh - 385px), 640px); }
 #camframe {
-  position: relative; width: min(100%, 46vh, 420px); flex: none;
+  position: relative; width: var(--carre); flex: none;
   aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #f3f4f6;
 }
 #cam { width: 100%; height: 100%; object-fit: cover; display: block;
@@ -176,12 +185,12 @@ button:disabled { opacity: .35; cursor: default; }
 /* Réglages sous la caméra. #stage centre ses enfants ; on rétablit un alignement
    à gauche et on cale la largeur sur celle du cadre vidéo pour que l'ensemble
    reste une colonne. */
-#stagecontrols { width: min(100%, 420px); text-align: left; margin-top: 2px; }
+#stagecontrols { width: var(--carre); text-align: left; margin-top: 2px; }
 #stagecontrols label.check { margin-bottom: 8px; }
 
 #notice {
   border: 1px solid #f0c000; background: #fffbeb; color: #7a5b00;
-  border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: 420px;
+  border-radius: 8px; padding: 8px 12px; font-size: 12px; max-width: var(--carre);
   text-align: center;
 }
 #notice[hidden] { display: none; }
@@ -212,5 +221,5 @@ button:disabled { opacity: .35; cursor: default; }
   .chip { padding: 1px 7px; font-size: 10px; }
   .chip span { font-size: 9px; }
   /* Le carré rend la place qu'il faut au score et aux réglages sous lui. */
-  #camframe { width: min(100%, 36vh, 420px); }
+  #stage { --carre: min(100%, calc(100vh - 360px), 640px); }
 }
