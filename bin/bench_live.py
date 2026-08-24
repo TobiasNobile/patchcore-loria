@@ -99,7 +99,7 @@ def measure(bank_dir):
     import cv2
 
     heatmap = np.zeros((size, size), np.float32)
-    from live_web import overlay_heatmap
+    from live.server import overlay_heatmap
 
     def _encode():
         img = overlay_heatmap(preview, heatmap, 0.0, 175.0, 2.0)
