@@ -5,6 +5,10 @@ _BACKBONES = {
     "alexnet": "models.alexnet(pretrained=True)",
     "bninception": 'pretrainedmodels.__dict__["bninception"]'
     '(pretrained="imagenet", num_classes=1000)',
+    # resnet18 et resnet34 ne viennent pas de l'amont : la page les propose au
+    # fit, et sans eux `load` lève un KeyError au milieu d'un fit déjà lancé.
+    "resnet18": "models.resnet18(pretrained=True)",
+    "resnet34": "models.resnet34(pretrained=True)",
     "resnet50": "models.resnet50(pretrained=True)",
     "resnet101": "models.resnet101(pretrained=True)",
     "resnext101": "models.resnext101_32x8d(pretrained=True)",
