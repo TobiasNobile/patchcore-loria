@@ -198,6 +198,7 @@ CPU (Apple M-series, torch 4 threads / faiss 1) :
 | wideresnet50 | 224 px | p0.05 | 196 000 | 2,4 ms | 52,7 ms | 133,4 ms | 2,4 ms | 1,0 ms | 190,9 ms | 5,2 | 0,6406 |
 | wideresnet50 | 160 px | p0.005 | 10 000 | 2,2 ms | 34,4 ms | 5,5 ms | 1,8 ms | 0,6 ms | 43,9 ms | 22,5 | 0,6309 |
 | wideresnet50 | 128 px | p0.005 | 6 400 | 2,0 ms | 27,6 ms | 2,5 ms | 1,5 ms | 0,4 ms | 33,5 ms | 29,4 | 0,6355 |
+| resnet50 | 224 px | p0.005 | 19 600 | 2,5 ms | 31,3 ms | 16,5 ms | 1,4 ms | 1,0 ms | 51,7 ms | 19,0 | 0,5560 |
 | resnet50 | 160 px | p0.005 | 10 000 | 2,2 ms | 18,4 ms | 5,5 ms | 1,4 ms | 0,6 ms | 27,5 ms | 35,6 | 0,5634 |
 | resnet50 | 128 px | p0.005 | 6 400 | 2,0 ms | 14,9 ms | 2,4 ms | 0,8 ms | 0,4 ms | 20,2 ms | 48,5 | 0,5851 |
 | resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
@@ -220,8 +221,12 @@ banque compte trois fois moins de vecteurs, puisque le coreset est une fraction
 d'un nombre de patchs qui suit la surface.
 
 Changer de backbone, lui, se paie toujours : resnet50 double encore la cadence
-(48,5 FPS à 128 px) mais tombe à 0,5851 d'AUROC. Autrement dit, descendre en
-résolution avant d'alléger le backbone.
+(48,5 FPS à 128 px) mais tombe à 0,5851 d'AUROC. Le duel à taille égale est net —
+à 224 px et coreset identique, wideresnet50 rend 12,9 FPS pour 0,6321 quand
+resnet50 en rend 19,0 pour 0,5560 : la moitié de cadence en plus, un dixième
+d'AUROC en moins. Ce sont les deux banques livrées dans `coresets/`, de quoi
+basculer de l'une à l'autre dans la page et voir l'écart en direct. Autrement
+dit : descendre en résolution avant d'alléger le backbone.
 
 Alléger le backbone achète des FPS et coûte de l'AUROC, jusqu'à tomber au niveau
 du hasard : resnet18 à 224 px est à 0,4855, soit sous 0,5. Les seules configurations
