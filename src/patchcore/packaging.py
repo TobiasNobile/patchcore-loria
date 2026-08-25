@@ -48,19 +48,25 @@ def slugify(text, fallback="Tache"):
 
 
 def build_name(config, task):
-    """`<Backbone>_<Tache>_<couches>_<coreset>_ts<n>_s<seed>.pkg`.
+    """`<Backbone>_<Tache>_<couches>[_im<px>]_<coreset>_ts<n>_s<seed>.pkg`.
 
     Tout y figure, defauts compris : deux variantes d'une même tâche doivent
-    cohabiter sans s'écraser, seeds inclus."""
+    cohabiter sans s'écraser, seeds inclus. La taille d'image manquait, et
+    trois banques ne différant que par elle — 224, 160, 128 px — tombaient
+    toutes sur le même nom. Suffixée seulement hors du défaut, comme dans
+    build_tag : les banques déjà empaquetées gardent le leur."""
     layers = "-".join(
         l.replace("layer", "l") for l in config.get("layers_to_extract_from", [])
     ) or "l?"
     sampler = config.get("sampler_name", "identity")
     coreset = ("identity" if sampler == "identity"
                else "p{:g}".format(config.get("coreset_pct", 0)))
-    return "{}_{}_{}_{}_ts{}_s{}{}".format(
+    size = "" if config.get("imagesize", 224) == 224 else "_im{}".format(
+        config["imagesize"])
+    return "{}_{}_{}{}_{}_ts{}_s{}{}".format(
         backbone_label(config.get("backbone_name", "?")), slugify(task), layers,
-        coreset, config.get("train_subset") or "all", config.get("seed", 0), SUFFIX,
+        size, coreset, config.get("train_subset") or "all",
+        config.get("seed", 0), SUFFIX,
     )
 
 
