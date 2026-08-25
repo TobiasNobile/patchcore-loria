@@ -64,8 +64,10 @@ CORESETS_DIR = os.environ.get("PATCHCORE_CORESETS_DIR") or os.path.join(
     _ROOT, patchcore.packaging.CORESETS_DIR
 )
 
-# Backbones proposés au fit, du plus lourd au plus rapide.
-FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34")
+# Backbones proposés au fit, du plus lourd au plus rapide. Les quatre sont ceux
+# des banques livrées : ce qu'on peut comparer sans rien fitter, on doit pouvoir
+# le refitter sur sa propre scène.
+FIT_BACKBONES = ("wideresnet50", "resnet50", "resnet34", "resnet18")
 FIT_LAYERS = ("layer1", "layer2", "layer3", "layer4")
 FIT_DEFAULT_LAYERS = ("layer2", "layer3")
 FIT_DEFAULT_CORESET_PCT = 0.01

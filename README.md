@@ -59,10 +59,12 @@ If you use the code in this repository, please cite
 python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
 
-Le dépôt livre deux banques dans `coresets/`, prêtes à scorer : la même tâche
-« personne + couteau » sur deux backbones, WideResNet50 et ResNet50, à
-configuration identique par ailleurs — de quoi voir en direct ce que coûte un
-backbone plus léger. La page présélectionne la première. Toute autre banque
+Le dépôt livre quatre banques dans `coresets/`, prêtes à scorer : la même tâche
+« personne + couteau » sur quatre backbones — WideResNet50, ResNet50, ResNet34,
+ResNet18 — à configuration identique par ailleurs (224 px, l3-l4, coreset 0,005,
+20 000 images, seed 0) : de quoi voir en direct ce que coûte un backbone plus
+léger. La page présélectionne WideResNet50, le seul des quatre au-dessus de 0,6
+d'AUROC. Toute autre banque
 déposée dans `coresets/` est trouvée au démarrage suivant.
 
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
@@ -202,6 +204,7 @@ CPU (Apple M-series, torch 4 threads / faiss 1) :
 | resnet50 | 160 px | p0.005 | 10 000 | 2,2 ms | 18,4 ms | 5,5 ms | 1,4 ms | 0,6 ms | 27,5 ms | 35,6 | 0,5634 |
 | resnet50 | 128 px | p0.005 | 6 400 | 2,0 ms | 14,9 ms | 2,4 ms | 0,8 ms | 0,4 ms | 20,2 ms | 48,5 | 0,5851 |
 | resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
+| resnet34 | 224 px | p0.005 | 19 600 | 2,5 ms | 20,2 ms | 16,3 ms | 2,3 ms | 1,1 ms | 41,2 ms | 23,7 | 0,5507 |
 | resnet18 | 160 px | p0.01 | 20 000 | 2,2 ms | 8,8 ms | 10,4 ms | 0,8 ms | 0,6 ms | 22,2 ms | 43,9 | 0,5388 |
 | resnet18 | 224 px | p0.005 | 19 600 | 2,4 ms | 12,9 ms | 13,6 ms | 2,0 ms | 1,0 ms | 30,9 ms | 31,4 | 0,4855 |
 
@@ -224,12 +227,14 @@ Changer de backbone, lui, se paie toujours : resnet50 double encore la cadence
 (48,5 FPS à 128 px) mais tombe à 0,5851 d'AUROC. Le duel à taille égale est net —
 à 224 px et coreset identique, wideresnet50 rend 12,9 FPS pour 0,6321 quand
 resnet50 en rend 19,0 pour 0,5560 : la moitié de cadence en plus, un dixième
-d'AUROC en moins. Ce sont les deux banques livrées dans `coresets/`, de quoi
-basculer de l'une à l'autre dans la page et voir l'écart en direct. Autrement
+d'AUROC en moins. Ce sont deux des quatre banques livrées dans `coresets/`, de
+quoi basculer de l'une à l'autre dans la page et voir l'écart en direct. Autrement
 dit : descendre en résolution avant d'alléger le backbone.
 
 Alléger le backbone achète des FPS et coûte de l'AUROC, jusqu'à tomber au niveau
-du hasard : resnet18 à 224 px est à 0,4855, soit sous 0,5. Les seules configurations
+du hasard. À 224 px et coreset identique, resnet34 tient encore le niveau de
+resnet50 — 0,5507 pour 23,7 FPS contre 0,5560 pour 19,0, soit un quart de cadence
+en plus pour rien de perdu — mais resnet18 tombe à 0,4855, soit sous 0,5. Les seules configurations
 utiles au-dessus de 30 FPS restent resnet50 · 128 px (0,5989) et resnet18 · 160 px
 (0,5388) — encore loin des 0,6406 de wideresnet50.
 
