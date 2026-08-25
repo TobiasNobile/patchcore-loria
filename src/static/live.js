@@ -465,42 +465,41 @@ $("snap").addEventListener("click", async () => {
 });
 
 let lastFitName = null;
+// Le flux MJPEG est-il clos ? Vrai au départ, et dès que le serveur cesse de
+// filmer et de scorer : le <img> doit alors être rebranché sur une URL neuve.
+let camCoupe = true;
 
 function apply(s) {
   RUNNING = !!s.running;
-  // Le flux MJPEG se termine avec la boucle : on rebranche le <img> à chaque
-  // démarrage, avec une URL unique sinon le navigateur ressert la réponse close.
+  // Le serveur sert le flux tant qu'on filme ou qu'on score, et le coupe entre
+  // les deux — pendant le fit. D'où deux états à distinguer : ce qu'on montre, et
+  // si la connexion est encore vivante. On garde la dernière image à l'écran
+  // pendant le fit, mais on retient qu'il faudra rouvrir, sinon le scoring
+  // reprendrait sur un flux clos — le navigateur resservirait la réponse fermée.
   const cam = $("cam");
-  if (s.running && cam.hidden) {
-    cam.src = "/stream.mjpg?" + Date.now();
+  const flux = s.running || !!s.filming;
+  if (flux && camCoupe) {
+    cam.src = "/stream.mjpg?" + Date.now();   // URL unique : pas de cache
+    camCoupe = false;
     cam.hidden = false;
     $("placeholder").hidden = true;
-  } else if (!s.running && !cam.hidden) {
-    cam.hidden = true;
-    cam.removeAttribute("src");
-    $("placeholder").hidden = false;
-  }
-
-  // Le filmage passe par le même flux MJPEG que le scoring, mais `running` est
-  // faux tant qu'on enrôle : sans ce cadre-là, on filme sa banque à l'aveugle.
-  // Il reste branché tant que le travail online dure, de sorte que la dernière
-  // frame tienne l'écran pendant le fit qui suit, et s'efface quand le grand
-  // carré prend le relais au scoring.
-  const film = $("filmframe");
-  if (s.filming && film.hidden) {
-    $("filmcam").src = "/stream.mjpg?" + Date.now();
-    film.hidden = false;
-    // Le panneau défile de son côté : sur une fenêtre courte, le cadre naît
-    // sous le bord et personne ne le voit — or il ne sert qu'à être regardé.
-    film.scrollIntoView({ block: "nearest" });
-  } else if (!s.filming && !film.hidden && (s.running || !(s.fit || {}).running)) {
-    film.hidden = true;
-    $("filmcam").removeAttribute("src");
+  } else if (!flux) {
+    camCoupe = true;
+    // Ni filmage ni scoring : le carré ne rend la place au message d'attente que
+    // si aucun fit online n'est en cours, dont l'image est le dernier état vu.
+    if (!(s.fit || {}).running && !cam.hidden) {
+      cam.hidden = true;
+      cam.removeAttribute("src");
+      $("placeholder").hidden = false;
+    }
   }
 
   $("score").textContent =
     s.score === null || s.score === undefined ? "—" : s.score.toFixed(2);
-  $("status").textContent = s.running ? "en cours" : "arrêté";
+  // « arrêté » sous une image manifestement vivante se lisait comme une panne :
+  // depuis que le filmage occupe le grand carré, il lui faut son propre mot.
+  $("status").textContent = s.running ? "en cours"
+    : s.filming ? "filmage" : "arrêté";
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
