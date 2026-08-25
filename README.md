@@ -56,13 +56,12 @@ If you use the code in this repository, please cite
 ## Démarrage rapide
 
 ```shell
-python main.py fetch-bank # la banque de démonstration, 153 Mo, hors du dépôt
 python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
 
-Le premier script est facultatif : sans lui la page s'ouvre quand même, mais il
-faut fitter une banque avant de pouvoir scorer quoi que ce soit. Avec, la banque
-« personne + couteau » est présélectionnée à l'ouverture.
+La page s'ouvre sans banque, mais il faut en fitter une avant de pouvoir scorer
+quoi que ce soit. Une banque déjà construite se dépose dans `coresets/` — la
+page la trouve toute seule au démarrage suivant.
 
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
@@ -112,9 +111,7 @@ au push tout fichier au-delà de 100 Mio — et un blob de cette taille resterai
 dans l'historique de chaque clone même après suppression. Les banques se
 distribuent donc en **asset de release** : un fichier attaché à une version
 publiée, hébergé à côté du dépôt et non dedans, que `git clone` ne rapatrie pas.
-C'est ce que va chercher `python main.py fetch-bank`, somme de contrôle à
-l'appui. Une
-petite banque peut toujours être committée pour de bon avec `git add -f`.
+Une petite banque peut toujours être committée pour de bon avec `git add -f`.
 
 La page empaquette elle-même à la fin d'un fit : le `.pkg` apparaît dans
 `coresets/` et dans le sélecteur, sans rien à convertir à la main.
@@ -147,7 +144,7 @@ Deux axes : le dataset, puis la phase. Le fit est la moitié coûteuse et hors-l
 et n'écrit que des figures et des mesures.
 
 ```
-main.py                     # le seul exécutable : sert la page, ou fetch-bank
+main.py                     # le seul exécutable : sert la page
 coresets/<nom>.pkg          # banques empaquetées (gitignoré)
 coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
 
