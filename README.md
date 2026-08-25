@@ -59,9 +59,11 @@ If you use the code in this repository, please cite
 python main.py            # puis ouvrir http://127.0.0.1:8000
 ```
 
-La page s'ouvre sans banque, mais il faut en fitter une avant de pouvoir scorer
-quoi que ce soit. Une banque déjà construite se dépose dans `coresets/` — la
-page la trouve toute seule au démarrage suivant.
+Le dépôt livre deux banques dans `coresets/`, prêtes à scorer : la même tâche
+« personne + couteau » sur deux backbones, WideResNet50 et ResNet50, à
+configuration identique par ailleurs — de quoi voir en direct ce que coûte un
+backbone plus léger. La page présélectionne la première. Toute autre banque
+déposée dans `coresets/` est trouvée au démarrage suivant.
 
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
@@ -83,9 +85,12 @@ seule une frame sur dix environ est scorée si l'inférence prend 170 ms.
 Une banque tient dans un fichier, et son nom dit sa configuration :
 
 ```
-coresets/WideResNet50_DetectionKnife_l3-l4_p0.01_ts20000.pkg
-         backbone     tâche          couches coreset images de fit
+coresets/WideResNet50_DetectionKnife_l3-l4_p0.005_ts20000_s0.pkg
+         backbone     tâche          couches coreset images  seed
 ```
+
+Une taille d'image non standard s'y glisse aussi, après les couches : `_im128`.
+Rien pour 224 px, le défaut — les banques déjà nommées gardent leur nom.
 
 **D'où viennent ces images.** Rien n'a été filmé pour cette banque : elle est
 fittée sur **COCO 2017**, le jeu de photos annotées de Microsoft, récupéré depuis
@@ -93,7 +98,9 @@ fittée sur **COCO 2017**, le jeu de photos annotées de Microsoft, récupéré 
 **aucun** couteau ; les images de personne **avec** couteau ne rentrent pas dans
 la banque, elles ne servent qu'à mesurer ce qui la sépare du reste. Cette
 banque-ci a pris 20 000 images des splits `train2017` et `val2017`, fittées sur
-un nœud Grid5000 — d'où le `ts20000` du nom.
+un nœud Grid5000 — d'où le `ts20000` du nom. Sa jumelle ResNet50 est fittée sur
+les mêmes images, avec les mêmes couches, le même coreset et le même seed : seul
+le backbone change.
 
 Une seconde banque, `DetectionKnifeVal2017_l3-l4_p0.005`, tient la même tâche à
 partir du seul `val2017` : 1 200 images de personne sans couteau, dont 960 dans
