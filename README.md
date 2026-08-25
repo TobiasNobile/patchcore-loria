@@ -189,6 +189,10 @@ CPU (Apple M-series, torch 4 threads / faiss 1) :
 | wideresnet50 | 224 px | p0.01 | 39 200 | 2,3 ms | 54,2 ms | 26,8 ms | 3,9 ms | 1,0 ms | 87,2 ms | 11,3 | 0,6375 |
 | wideresnet50 | 224 px | p0.02 | 78 400 | 2,5 ms | 58,6 ms | 54,2 ms | 0,0 ms | 0,9 ms | 115,3 ms | 8,6 | 0,6395 |
 | wideresnet50 | 224 px | p0.05 | 196 000 | 2,4 ms | 52,7 ms | 133,4 ms | 2,4 ms | 1,0 ms | 190,9 ms | 5,2 | 0,6406 |
+| wideresnet50 | 160 px | p0.005 | 10 000 | 2,2 ms | 34,4 ms | 5,5 ms | 1,8 ms | 0,6 ms | 43,9 ms | 22,5 | 0,6309 |
+| wideresnet50 | 128 px | p0.005 | 6 400 | 2,0 ms | 27,6 ms | 2,5 ms | 1,5 ms | 0,4 ms | 33,5 ms | 29,4 | 0,6355 |
+| resnet50 | 160 px | p0.005 | 10 000 | 2,2 ms | 18,4 ms | 5,5 ms | 1,4 ms | 0,6 ms | 27,5 ms | 35,6 | 0,5634 |
+| resnet50 | 128 px | p0.005 | 6 400 | 2,0 ms | 14,9 ms | 2,4 ms | 0,8 ms | 0,4 ms | 20,2 ms | 48,5 | 0,5851 |
 | resnet50 | 128 px | p0.01 | 12 800 | 1,9 ms | 14,7 ms | 4,7 ms | 1,7 ms | 0,4 ms | 23,1 ms | 42,6 | 0,5989 |
 | resnet18 | 160 px | p0.01 | 20 000 | 2,2 ms | 8,8 ms | 10,4 ms | 0,8 ms | 0,6 ms | 22,2 ms | 43,9 | 0,5388 |
 | resnet18 | 224 px | p0.005 | 19 600 | 2,4 ms | 12,9 ms | 13,6 ms | 2,0 ms | 1,0 ms | 30,9 ms | 31,4 | 0,4855 |
@@ -199,6 +203,18 @@ la diviser encore par deux n'en rend plus que 1,6. Le temps faiss n'est pas tout
 un coût fixe d'environ 6 ms. Et surtout le backbone, lui, ne bouge pas : ses
 54 ms font désormais les trois quarts du budget. À 224 px sur wideresnet50, même
 une banque vide plafonnerait vers 17 FPS.
+
+**C'est la résolution qui débloque, et elle est gratuite.** À coreset et couches
+constants, wideresnet50 passe de 12,9 à 22,5 puis 29,4 FPS en descendant de 224 à
+160 puis 128 px — et l'AUROC ne baisse pas : 0,6321, 0,6309, **0,6355**. La plus
+petite est même la meilleure des trois, à 26 Mo de banque contre 77. Deux raisons
+se cumulent : le backbone traite quatre fois moins de pixels (54 → 28 ms) et la
+banque compte trois fois moins de vecteurs, puisque le coreset est une fraction
+d'un nombre de patchs qui suit la surface.
+
+Changer de backbone, lui, se paie toujours : resnet50 double encore la cadence
+(48,5 FPS à 128 px) mais tombe à 0,5851 d'AUROC. Autrement dit, descendre en
+résolution avant d'alléger le backbone.
 
 Alléger le backbone achète des FPS et coûte de l'AUROC, jusqu'à tomber au niveau
 du hasard : resnet18 à 224 px est à 0,4855, soit sous 0,5. Les seules configurations
