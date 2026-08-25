@@ -80,9 +80,11 @@ FIT_MAX_IMAGES = 20_000
 # banque : `DetectionKnife_l3-l4` suffisait tant qu'il n'y en avait qu'une, mais
 # une variante de coreset a suffi à le rendre ambigu — et c'est la première dans
 # l'ordre alphabétique qui l'emportait, soit p0.005 avant p0.01. Le coreset fait
-# donc partie du motif ; c'est la banque que `main.py fetch-bank` installe et que
-# le README décrit.
-DEFAULT_BANK = os.environ.get("LIVE_DEFAULT_BANK", "DetectionKnife_l3-l4_p0.01")
+# donc partie du motif, et le backbone avec : les deux banques livrées dans le
+# dépôt ne diffèrent que par lui, et sans ça c'est ResNet50 qui l'emporterait par
+# ordre alphabétique — la plus faible des deux.
+DEFAULT_BANK = os.environ.get(
+    "LIVE_DEFAULT_BANK", "WideResNet50_DetectionKnife_l3-l4_p0.005")
 
 
 def default_bank_dir(banks):
