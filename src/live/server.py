@@ -126,6 +126,19 @@ COLORMAP_HIGH = 0.9
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
+# Marge posée sur une échelle mesurée : vmax = coefficient x mesure. Un
+# coefficient a part, et non le curseur alpha : alpha est un exposant d'opacite,
+# et le lui confier ferait bouger d'un seul geste ce qu'on voit et le niveau ou
+# ca sature, sans plus pouvoir regler l'un sans l'autre. Sous 1, le pic mesure
+# passe au-dessus de la borne et sature franchement ; a 1, il arrive pile dessus.
+VMAX_COEF_MIN, VMAX_COEF_MAX = 0.1, 2.0
+
+
+def clamp_coef(value):
+    """Hors de ces bornes, la marge ne corrige plus une mesure, elle l'invente."""
+    return min(max(float(value), VMAX_COEF_MIN), VMAX_COEF_MAX)
+
+
 # Quantile des scores du test qui devient le vmax, dans le mode auto-calibré.
 # Pas le maximum : une seule frame prise au bon angle placerait la saturation là
 # où l'anomalie n'est presque jamais, et elle resterait orange le reste du temps.
@@ -612,7 +625,9 @@ class Runner:
                 # reste réglable comme n'importe quel réglage à chaud.
                 mesure = self._fit.get("vmax")
                 if mesure:
-                    suite["vmax"] = mesure
+                    suite["vmax"] = mesure * params.get("vmax_coef", 1.0)
+                # Brute, elle : c'est le repere du normal affiche pendant le
+                # test, pas une echelle appliquee.
                 suite["bank_vmax"] = mesure
 
             if params.get("autocalib"):
@@ -662,11 +677,16 @@ class Runner:
 
         suite = dict(suite)
         if mesure:
-            suite["vmax"] = mesure["vmax"]
+            coef = suite.get("vmax_coef", 1.0)
+            suite["vmax"] = mesure["vmax"] * coef
+            # `calib_kept` reste la mesure brute : la page en refait le produit
+            # avec le coefficient qu'elle affiche, et les deux restent d'accord
+            # même si on le change juste après.
             self._update(calib_kept=mesure["vmax"])
             LOGGER.info(
-                "Test terminé : vmax %.2f (p%g de %d scores, max %.2f).",
-                mesure["vmax"], CALIB_PERCENTILE, mesure["n"], mesure["max"],
+                "Test terminé : vmax %.2f (p%g de %d scores, max %.2f, "
+                "coefficient %.2f).",
+                suite["vmax"], CALIB_PERCENTILE, mesure["n"], mesure["max"], coef,
             )
         else:
             # Bouton pressé avant la première inférence : rien à garder, on s'en
@@ -1069,6 +1089,8 @@ class Handler(BaseHTTPRequestHandler):
                 "smoothing_seconds": SMOOTHING_SECONDS,
                 "smoothing_seconds_max": SMOOTHING_SECONDS_MAX,
                 "calib_percentile": CALIB_PERCENTILE,
+                "vmax_coef_min": VMAX_COEF_MIN,
+                "vmax_coef_max": VMAX_COEF_MAX,
                 "banks": banks,
                 "default_bank": default_bank_dir(banks),
             })
@@ -1257,6 +1279,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": clamp_zoom(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
+                    "vmax_coef": clamp_coef(params.get("vmax_coef") or 1.0),
                     # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
                     "alpha": HEATMAP_ALPHA if params.get("alpha") is None
                              else clamp_alpha(params["alpha"]),
@@ -1315,6 +1338,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(p.get("stride") or 1)),
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),
+                    "vmax_coef": clamp_coef(p.get("vmax_coef") or 1.0),
                     "alpha": HEATMAP_ALPHA if p.get("alpha") is None
                              else clamp_alpha(p["alpha"]),
                     "smoothing": (p.get("smoothing")

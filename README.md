@@ -204,7 +204,12 @@ l'échelle obtenue est un plancher optimiste.
 La case **Self-calibrating VMax**, dans ce même mode, prend l'échelle par l'autre
 bout : après la banque, on filme l'**anomalie**, un bouton clôt le test, et le
 **p90 des scores du test** devient le VMax — pas le pic, qu'une seule frame bien
-cadrée suffirait à porter trop haut. Détail des deux échelles et relevés dans
+cadrée suffirait à porter trop haut.
+
+Ces deux échelles sont des mesures ; ce qu'on en fait reste un réglage. Un
+coefficient à côté du champ pose la marge — `vmax = coefficient × mesure`, 1 par
+défaut, et le calcul est écrit sous le champ. Il ne multiplie qu'une mesure :
+un vmax tapé à la main lui échappe. Détail des deux échelles et relevés dans
 [docs/vmax.md](docs/vmax.md).
 
 ## Cadence live — coût d'une frame

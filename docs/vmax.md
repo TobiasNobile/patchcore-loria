@@ -41,7 +41,8 @@ fit et garde le maximum de leurs scores. Il part dans `fit_config.json` sous
   heatmap — flouté et rééchantillonné, donc plus bas (70,55 contre 73,06 sur le
   relevé ci-dessus). Le nombre affiché sous la caméra et la borne de couleur
   sont alors la même grandeur. Le pic de carte est gardé pour situer l'écart.
-- **Aucune marge** : la saturation commence pile au-dessus du pire normal.
+- **Aucune marge par défaut** : la saturation commence pile au-dessus du pire
+  normal. Le coefficient plus bas la déplace, sans toucher à la mesure.
 - Plafonné à 200 images (`FIT_CALIB_IMAGES`, 0 pour couper) et enveloppé dans un
   `try` : un dataset sans nominal hors banque ne fait pas échouer le fit.
 
@@ -96,6 +97,31 @@ une boucle — `stop` abandonne tout sans rien garder (`Test interrompu.`),
 `end_test` la clôt en gardant sa mesure. Ce qui a été réglé à chaud pendant le
 test (zoom, alpha, stride, lissage) suit dans la démo : sans ça, l'image
 changerait entre la calibration et ce qu'elle est censée calibrer.
+
+## Le coefficient
+
+Les deux échelles sont des mesures ; ce qu'on en fait reste un réglage
+d'affichage. D'où un coefficient à côté du champ, `vmax = coefficient × mesure`,
+1 par défaut. Sous 1, le pic mesuré passe au-dessus de la borne et sature
+franchement ; à 1, il arrive pile dessus. Il ne multiplie **qu'une mesure** : un
+vmax tapé à la main ou repris de la table lui échappe, et le calcul écrit sous le
+champ disparaît alors plutôt que d'afficher une égalité fausse.
+
+```
+0,80 × 73,1 (mesure hors banque) = 58,4
+```
+
+Un coefficient à part, et non le curseur alpha, malgré la tentation : alpha est
+un **exposant** d'opacité, `opacité = (score / vmax)^α × 0,9`. Les deux réglages
+sont couplés — à α = 2, un pixel atteint la demi-opacité à 0,71 × vmax, à α = 4 à
+0,84 × vmax — mais par une puissance, pas par un produit. Confier la marge au
+curseur ferait bouger d'un seul geste ce qu'on voit *et* le niveau où ça sature,
+sans plus pouvoir régler l'un sans l'autre.
+
+Le serveur applique la même marge de son côté dans les deux cas où la mesure
+arrive après le démarrage — fit online, fin de test — et garde la mesure brute
+dans son état : c'est elle que la page multiplie pour afficher le calcul, donc
+les deux parlent toujours du même nombre.
 
 ## Ce que ça ne dit pas
 

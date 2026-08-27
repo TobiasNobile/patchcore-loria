@@ -27,6 +27,28 @@ def test_le_quantile_du_test_devient_le_vmax(runner, monkeypatch):
     assert runner.state()["calib_kept"] == 121.5
 
 
+def test_le_coefficient_multiplie_la_mesure(runner, monkeypatch):
+    """La marge s'applique à l'échelle mesurée, et à elle seule.
+
+    `calib_kept` reste la mesure brute : c'est ce que la page multiplie de son
+    côté pour afficher le calcul, et les deux doivent parler du même nombre.
+    """
+    monkeypatch.setattr(runner, "_run",
+                        lambda params: {"vmax": 100.0, "max": 130.0, "n": 300})
+
+    suite = runner._tester_puis_calibrer({"vmax": 20.0, "vmax_coef": 0.8})
+
+    assert suite["vmax"] == pytest.approx(80.0)
+    assert runner.state()["calib_kept"] == 100.0
+
+
+def test_le_coefficient_est_borne():
+    """Hors bornes, la marge n'ajuste plus une mesure, elle l'invente."""
+    assert server.clamp_coef(0.0) == server.VMAX_COEF_MIN
+    assert server.clamp_coef(9.0) == server.VMAX_COEF_MAX
+    assert server.clamp_coef(0.8) == 0.8
+
+
 def test_les_reglages_du_test_suivent_dans_la_demo(runner, monkeypatch):
     """Le zoom réglé en présentant l'anomalie vaut aussi pour ce qui suit.
 
