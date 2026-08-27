@@ -130,19 +130,6 @@ COLORMAP_HIGH = 0.9
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
-# Marge posée sur une échelle mesurée : vmax = coefficient x mesure. Sous 1, le
-# pic mesure passe au-dessus de la borne et sature franchement ; a 1, il arrive
-# pile dessus. C'est le haut de la rampe ; le curseur de seuil, lui, en coupe le
-# bas (cf. HEATMAP_SEUIL). Deux reglages pour les deux bouts, separes a dessein :
-# un seul curseur pour les deux ne permettrait plus d'en bouger un sans l'autre.
-VMAX_COEF_MIN, VMAX_COEF_MAX = 0.1, 2.0
-
-
-def clamp_coef(value):
-    """Hors de ces bornes, la marge ne corrige plus une mesure, elle l'invente."""
-    return min(max(float(value), VMAX_COEF_MIN), VMAX_COEF_MAX)
-
-
 # Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
 # il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
 # rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
@@ -591,7 +578,7 @@ class Runner:
                 # couches, ou ce qui a été tapé.
                 mesure = self._fit.get("vmax")
                 if mesure and params.get("autocalib"):
-                    suite["vmax"] = mesure * params.get("vmax_coef", 1.0)
+                    suite["vmax"] = mesure
                 self._stop.clear()
                 self._preparer_run(suite)
             self._run(suite)
@@ -966,8 +953,6 @@ class Handler(BaseHTTPRequestHandler):
                 "max_images": FIT_MAX_IMAGES,
                 "smoothing_seconds": SMOOTHING_SECONDS,
                 "smoothing_seconds_max": SMOOTHING_SECONDS_MAX,
-                "vmax_coef_min": VMAX_COEF_MIN,
-                "vmax_coef_max": VMAX_COEF_MAX,
                 "banks": banks,
                 "default_bank": default_bank_dir(banks),
             })
@@ -1156,7 +1141,6 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": clamp_zoom(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
-                    "vmax_coef": clamp_coef(params.get("vmax_coef") or 1.0),
                     # `or` interdit : seuil=0 est une valeur voulue (heatmap pleine).
                     "seuil": HEATMAP_SEUIL if params.get("seuil") is None
                              else clamp_seuil(params["seuil"]),
@@ -1215,7 +1199,6 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(p.get("stride") or 1)),
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),
-                    "vmax_coef": clamp_coef(p.get("vmax_coef") or 1.0),
                     "seuil": HEATMAP_SEUIL if p.get("seuil") is None
                              else clamp_seuil(p["seuil"]),
                     "smoothing": (p.get("smoothing")

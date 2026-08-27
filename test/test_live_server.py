@@ -42,15 +42,6 @@ def test_le_seuil_est_borne():
     assert server.clamp_seuil(0.7) == 0.7
 
 
-# ─── La marge sur l'échelle mesurée ─────────────────────────────────────────
-
-def test_le_coefficient_est_borne():
-    """Hors bornes, la marge n'ajuste plus une mesure, elle l'invente."""
-    assert server.clamp_coef(0.0) == server.VMAX_COEF_MIN
-    assert server.clamp_coef(9.0) == server.VMAX_COEF_MAX
-    assert server.clamp_coef(0.8) == 0.8
-
-
 # ─── La fiche de banque affichée par le bandeau ─────────────────────────────
 
 def test_la_fiche_porte_l_echelle_mesuree():

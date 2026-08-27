@@ -41,8 +41,8 @@ fit et garde le maximum de leurs scores. Il part dans `fit_config.json` sous
   heatmap — flouté et rééchantillonné, donc plus bas (70,55 contre 73,06 sur le
   relevé ci-dessus). Le nombre affiché sous la caméra et la borne de couleur
   sont alors la même grandeur. Le pic de carte est gardé pour situer l'écart.
-- **Aucune marge par défaut** : la saturation commence pile au-dessus du pire
-  normal. Le coefficient plus bas la déplace, sans toucher à la mesure.
+- **Aucune marge** : la couleur sature pile au-dessus du pire normal. Ce qui
+  s'affiche ou non se règle en dessous, au seuil, pas en déplaçant la mesure.
 - Plafonné à 200 images (`FIT_CALIB_IMAGES`, 0 pour couper) et enveloppé dans un
   `try` : un dataset sans nominal hors banque ne fait pas échouer le fit.
 
@@ -65,43 +65,25 @@ Le commutateur des deux origines possibles du vmax, à côté du champ :
 | cochée | l'échelle mesurée au fit sur les images tirées hors banque | connaît la scène, et n'existe que si la banque porte la mesure |
 
 Elle agit en marche comme à l'arrêt : la basculer réécrit le champ et prévient le
-serveur. Le coefficient ne s'applique qu'au premier cas — il multiplie une
-mesure, pas une valeur de table — et la mesure reste affichée dans l'aide même
-décochée, parce qu'elle informe même quand elle n'est pas appliquée.
+serveur. La mesure reste affichée dans l'aide même décochée, parce qu'elle
+informe même quand elle n'est pas appliquée.
 
 Il n'y a **pas** de phase de test à jouer devant la caméra : les images qui
 mesurent l'échelle sont tirées au hasard du même filmage que la banque, en une
 seule prise. C'est tout l'intérêt — rien à présenter, rien à arrêter.
 
-## Le coefficient
+## Le seuil d'affichage
 
-Les deux échelles sont des mesures ; ce qu'on en fait reste un réglage
-d'affichage. D'où un coefficient à côté du champ, `vmax = coefficient × mesure`,
-1 par défaut. Sous 1, le pic mesuré passe au-dessus de la borne et sature
-franchement ; à 1, il arrive pile dessus. Il ne multiplie **qu'une mesure** : un
-vmax tapé à la main ou repris de la table lui échappe, et le calcul écrit sous le
-champ disparaît alors plutôt que d'afficher une égalité fausse.
-
-```
-0,80 × 73,1 (mesure hors banque) = 58,4
-```
-
-Le coefficient place le **haut** de la rampe ; le curseur sous la caméra en coupe
-le **bas**. Ce curseur est un seuil, en fraction de vmax : sous `seuil × vmax`,
-rien n'est dessiné, l'image reste nue — une découpe, pas un fondu. Le score en
-dessous duquel plus rien n'apparaît est donc `seuil × coefficient × mesure`, et
-c'est bien un produit des deux, chacun réglant un bout de la rampe.
+Le vmax place le haut de la rampe ; le curseur sous la caméra en coupe le bas.
+C'est un seuil, en fraction de vmax : sous `seuil × vmax`, rien n'est dessiné,
+l'image reste nue — une découpe, pas un fondu. À 0,70 sur une échelle de 73,
+13 % de la carte est peinte, le reste de la vignette étant intact.
 
 C'était auparavant un exposant d'opacité, `(score / vmax)^α`, qui ne rendait
 jamais rien tout à fait invisible : le fond nominal gardait un voile, et il
 fallait pousser α à son maximum pour l'effacer — ce qui écrasait du même coup
 tout ce qui n'était pas au pic. Le seuil sépare les deux questions : jusqu'où va
 la couleur, et à partir d'où on montre quelque chose.
-
-Le serveur applique la même marge de son côté dans les deux cas où la mesure
-arrive après le démarrage — fit online, fin de test — et garde la mesure brute
-dans son état : c'est elle que la page multiplie pour afficher le calcul, donc
-les deux parlent toujours du même nombre.
 
 ## Ce que ça ne dit pas
 

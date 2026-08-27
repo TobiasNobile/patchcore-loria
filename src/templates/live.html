@@ -237,16 +237,6 @@
       id="vmaxhint">—</span></small></label>
     <input id="vmax" class="live" type="number" min="0.1" step="0.1" value="10">
 
-    <!-- La marge sur l'échelle mesurée : elle place le *haut* de la rampe, là où
-         le curseur de seuil, sous la caméra, en coupe le bas. Sous 1, le pic
-         mesuré passe au-dessus de la borne et sature franchement ; à 1, il
-         arrive pile dessus. Sans effet sur un vmax tapé à la main : il ne
-         multiplie qu'une mesure, et le calcul est écrit juste en dessous. -->
-    <label for="vmax_coef">Coefficient sur l'échelle mesurée<small>vmax =
-      coefficient × mesure · 1 = la mesure telle quelle</small></label>
-    <input id="vmax_coef" class="live" type="number" min="0.1" max="2" step="0.05"
-           value="1">
-    <p id="vmaxcalc"></p>
 
   </section>
 </main>

@@ -156,11 +156,6 @@ button { font: inherit; padding: 6px 14px; border: 1px solid var(--ink);
 button.secondary { background: #fff; color: var(--ink); }
 button:disabled { opacity: .35; cursor: default; }
 #error { color: var(--bad); font-size: 12px; min-height: 16px; margin: 8px 0 0; }
-/* Le calcul du vmax appliqué, sous son coefficient. Vide quand aucune mesure ne
-   le nourrit : rien à afficher, et la place n'a pas à rester réservée. */
-#vmaxcalc { color: var(--muted); font-size: 11px; line-height: 1.35;
-            margin: -5px 0 9px; }
-#vmaxcalc:empty { display: none; }
 
 /* ─── Scène ──────────────────────────────────────────────────────────────── */
 #stage { display: flex; flex-direction: column; align-items: center; gap: 6px;

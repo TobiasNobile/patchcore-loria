@@ -211,10 +211,8 @@ possibles : cochée, le vmax est cette échelle mesurée ; décochée, c'est la 
 par couche, qui suit les cases cochées à gauche. Rien à jouer devant la caméra —
 les images qui mesurent l'échelle sortent du même filmage que la banque.
 
-Cette échelle est une mesure ; ce qu'on en fait reste un réglage. Un
-coefficient à côté du champ pose la marge — `vmax = coefficient × mesure`, 1 par
-défaut, et le calcul est écrit sous le champ. Il ne multiplie qu'une mesure :
-un vmax tapé à la main lui échappe. Détail des deux échelles et relevés dans
+Le champ reste réglable en direct dans les deux cas : une échelle mesurée est
+une proposition, pas une contrainte. Détail et relevés dans
 [docs/vmax.md](docs/vmax.md).
 
 ## Cadence live — coût d'une frame

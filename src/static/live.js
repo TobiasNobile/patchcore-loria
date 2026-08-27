@@ -68,8 +68,7 @@ function readParams() {
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
     // Le serveur applique la mesure lui-même quand elle arrive après le
-    // démarrage — fit online — donc il lui faut le mode et la marge.
-    vmax_coef: vmaxCoef(),
+    // démarrage — fit online — donc il lui faut le mode.
     autocalib: autoCalib(),
     seuil: seuilValue(),
     smoothing: smoothingMode(),
@@ -99,16 +98,6 @@ const fmtVmax = (v) => Math.round(v * 10) / 10;
 let VMAX_LAYERS = "";
 // L'échelle mesurée que porte la banque chargée, ou null. Cf. renderVmaxHint.
 let VMAX_CALIB = null;
-// Vrai tant que le champ vmax porte `coefficient × mesure`. Faux dès qu'une
-// valeur de table l'a remplacé : le calcul affiché ne décrirait plus ce qui est
-// appliqué, et il vaut mieux ne rien écrire que d'écrire une égalité fausse.
-let VMAX_FROM_CALIB = false;
-
-// La marge posée sur l'échelle mesurée. Bornée comme le champ, et jamais
-// appliquée à un vmax tapé à la main : elle ne multiplie qu'une mesure.
-const vmaxCoef = () =>
-  Math.min(Math.max(parseFloat($("vmax_coef").value) || 1, 0.1), 2);
-
 // Cochée, le vmax vient de l'échelle mesurée au fit sur les images tirées hors
 // banque ; décochée, de la table des couches. Un seul commutateur pour les deux
 // origines — le reste de la page ne fait que les rendre.
@@ -148,18 +137,6 @@ function renderVmaxHint() {
     : table || ("inconnu pour " + (VMAX_LAYERS || "?"));
 }
 
-// Le calcul, écrit tel qu'il est fait : sans lui le champ affiche un nombre
-// dont l'origine est invisible, et on ne sait pas si c'est la mesure, la marge
-// ou une saisie. Vide quand aucune mesure ne le nourrit.
-function renderVmaxCalc() {
-  const c = VMAX_CALIB;
-  if (!c || !VMAX_FROM_CALIB) { $("vmaxcalc").textContent = ""; return; }
-  const k = vmaxCoef();
-  const source = "mesure hors banque";
-  $("vmaxcalc").textContent =
-    `${k.toFixed(2)} × ${fmtVmax(c.vmax)} (${source}) = ${fmtVmax(c.vmax * k)}`;
-}
-
 // L'échelle que porte une banque : proposée dans le champ, sauf en marche — la
 // valeur affichée est alors celle qu'on a réglée à l'œil, la réécrire changerait
 // l'image sous les yeux. `force` est l'exception : un fit ou un test qui vient
@@ -169,34 +146,26 @@ function showVmaxHint(layers, calib, force) {
   VMAX_CALIB = calib && calib.vmax ? calib : null;
   renderVmaxHint();
   if (VMAX_CALIB && autoCalib()) {
-    if (!RUNNING || force) {
-      $("vmax").value = fmtVmax(VMAX_CALIB.vmax * vmaxCoef());
-      VMAX_FROM_CALIB = true;
-    }
-    renderVmaxCalc();
+    if (!RUNNING || force) $("vmax").value = fmtVmax(VMAX_CALIB.vmax);
     return;
   }
   const range = tableRange(VMAX_LAYERS);
-  if (range && !RUNNING) { $("vmax").value = range[0]; VMAX_FROM_CALIB = false; }
-  renderVmaxCalc();
+  if (range && !RUNNING) $("vmax").value = range[0];
 }
 
 // Le champ, réécrit depuis ce que le mode en vigueur désigne. Appelé sur un
-// geste explicite — la case, le coefficient, une couche cochée — donc il passe
-// outre le scoring en cours et prévient le serveur : écrire le champ sans le
-// dire laisserait la heatmap sur l'ancienne échelle, et le champ mentirait.
+// geste explicite — la case, une couche cochée — donc il passe outre le scoring
+// en cours et prévient le serveur : écrire le champ sans le dire laisserait la
+// heatmap sur l'ancienne échelle, et le champ mentirait.
 function appliquerVmax() {
   if (autoCalib() && VMAX_CALIB) {
-    $("vmax").value = fmtVmax(VMAX_CALIB.vmax * vmaxCoef());
-    VMAX_FROM_CALIB = true;
+    $("vmax").value = fmtVmax(VMAX_CALIB.vmax);
   } else {
     const range = tableRange(VMAX_LAYERS);
-    if (!range) { renderVmaxHint(); renderVmaxCalc(); return; }
+    if (!range) { renderVmaxHint(); return; }
     $("vmax").value = range[0];
-    VMAX_FROM_CALIB = false;
   }
   renderVmaxHint();
-  renderVmaxCalc();
   seuilRender();
   if (RUNNING) post("/api/update", { vmax: parseFloat($("vmax").value) });
 }
@@ -566,19 +535,13 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
   $(id).addEventListener("input", () =>
     post("/api/update", { [id]: parseFloat($(id).value) }));
 });
-// Le coefficient recalcule le vmax appliqué depuis la mesure, et l'envoie :
-// c'est un réglage d'affichage comme un autre, il doit valoir en marche.
-$("vmax_coef").addEventListener("input", appliquerVmax);
+// La case bascule l'origine du vmax et l'applique : c'est un réglage
+// d'affichage comme un autre, il doit valoir aussi en marche.
 $("selfcalib").addEventListener("change", appliquerVmax);
 
-// Un vmax tapé à la main n'est plus le produit affiché : le calcul s'efface.
-$("vmax").addEventListener("input", () => {
-  VMAX_FROM_CALIB = false;
-  renderVmaxCalc();
-  // Le seuil est une fraction de vmax : le score sous lequel rien ne s'affiche
-  // suit, et le curseur doit le redire.
-  seuilRender();
-});
+// Le seuil est une fraction de vmax : le score sous lequel rien ne s'affiche
+// suit, et le curseur doit le redire.
+$("vmax").addEventListener("input", seuilRender);
 
 $("smoothwin").addEventListener("input", () =>
   post("/api/update", { smoothing_seconds: parseFloat($("smoothwin").value || "0.3") }));
@@ -769,10 +732,6 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
   $("maximages").textContent = MAX_IMAGES;
-  // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
-  // avant l'envoi.
-  if (cfg.vmax_coef_min) $("vmax_coef").min = cfg.vmax_coef_min;
-  if (cfg.vmax_coef_max) $("vmax_coef").max = cfg.vmax_coef_max;
   SMOOTHING_SECONDS = cfg.smoothing_seconds ?? SMOOTHING_SECONDS;
   $("smoothwin").value = SMOOTHING_SECONDS.toFixed(1);
   if (cfg.smoothing_seconds_max) $("smoothwin").max = cfg.smoothing_seconds_max;
