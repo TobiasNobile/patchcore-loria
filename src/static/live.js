@@ -9,9 +9,8 @@ const fitForm = $("fit");
 const liveFields = [...document.querySelectorAll(
   "#livepanel input, #livepanel select, #stagecontrols input")];
 
-// Course du curseur alpha : exposant = MAX * s². Quadratique pour placer la
-// diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).
-let ALPHA_MAX = 4, ALPHA_DEFAULT = 2;
+// Exposant du canal alpha, dans [0, 1] : le curseur est directement l'exposant.
+let ALPHA_DEFAULT = 0.5;
 // Durée de scène visée par le lissage ; le nombre de cartes en découle côté
 // serveur, avec le fps de la source et le stride — la page ne fait que l'afficher.
 let SMOOTHING_SECONDS = 1 / 3;
@@ -23,13 +22,12 @@ let BANKS = {};
 const esc = (s) => String(s).replace(
   /[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const alphaExp = () => ALPHA_MAX * Math.pow(parseFloat($("alpha").value), 2);
+const alphaValue = () => parseFloat($("alpha").value);
 
 function alphaRender() {
-  const e = alphaExp();
-  $("alphaval").textContent =
-    parseFloat($("alpha").value).toFixed(2) + " · n^" + e.toFixed(1);
-  return e;
+  const a = alphaValue();
+  $("alphaval").textContent = a.toFixed(2);
+  return a;
 }
 
 // Une route que le serveur ne connaît pas répond « not found » en texte brut.
@@ -63,7 +61,7 @@ function readParams() {
     stride: parseInt($("stride").value || "1", 10),
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
-    alpha: alphaExp(),
+    alpha: alphaValue(),
     smoothing: smoothingMode(),
     smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
     loop: $("loop").checked,
@@ -520,9 +518,7 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 (async function init() {
   const cfg = await (await fetch("/api/config")).json();
   // `??` et non `=` : une clé absente — page chargée contre une version
-  // antérieure du serveur — laisserait sinon un undefined s'afficher, ou un NaN
-  // se propager dans la course de l'alpha.
-  ALPHA_MAX = cfg.alpha_max ?? ALPHA_MAX;
+  // antérieure du serveur — laisserait sinon un NaN se propager dans l'alpha.
   ALPHA_DEFAULT = cfg.alpha_default ?? ALPHA_DEFAULT;
   // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
   // avant l'envoi, une valeur trop haute ne rendant qu'une bouillie floue.
@@ -550,7 +546,7 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 
   fillBanks(cfg.banks, cfg.default_bank);
 
-  $("alpha").value = Math.sqrt(ALPHA_DEFAULT / ALPHA_MAX);
+  $("alpha").value = ALPHA_DEFAULT;
   alphaRender();
 
   refresh();

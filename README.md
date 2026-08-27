@@ -70,7 +70,7 @@ déposée dans `coresets/` est trouvée au démarrage suivant.
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
 détecter, et « Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
-— source, stride, échelle couleur et alpha se règlent pendant que ça tourne.
+— source, stride, échelle couleur et opacité se règlent pendant que ça tourne.
 
 Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
 endroit où torch est sûr sur macOS.
@@ -158,7 +158,7 @@ coresets/<nom>.pkg          # banques empaquetées (gitignoré)
 coresets/<nom>/normal/      # les images qui ont servi au fit (gitignoré)
 
 src/live/server.py          # l'app servie par main.py : fit + scoring live
-src/live/scoring.py         # une frame : prétraitement, agrégation, faiss
+src/live/scoring.py         # une frame : prétraitement, agrégation, faiss, rendu
 src/patchcore/              # le cœur : backbone, coreset, banque, scoring
 src/experiments/            # le fit, du Spec au .pkg
 src/templates/live.html     # la page servie par src/live/server.py
@@ -170,18 +170,54 @@ Les scripts live déduisent de la banque où écrire leurs captures
 
 ## Rendu de la heatmap
 
-Trois constantes de `src/live/server.py` gouvernent l'affichage, et donc les
-captures. Aucune ne touche aux scores.
+`overlay_heatmap()` de `src/live/scoring.py` fait tout le rendu. La *vignette*,
+c'est la frame telle que le réseau la voit — même `Resize` + `CenterCrop`, sans
+la normalisation — pour que la heatmap se superpose dessus sans réalignement.
+Aucun de ces réglages ne touche aux scores :
+
+```
+normalisé = max(heatmap / vmax − 1, 0)      # nul sous vmax
+couleur   = jet(clip(normalisé, 0,1 – 0,9))
+a         = clip(normalisé ** α, 0, 1)
+sortie    = couleur × a + vignette × (1 − a)
+```
 
 | constante | rôle |
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
-| `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `src/live/scoring.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
+| `HEATMAP_ALPHA` = 0,5 | position d'entrée du curseur d'opacité, l'exposant α ci-dessus, dans [0, 1] : à 1 le fondu est linéaire, à 0 tout est peint. Réglable en direct |
+| `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
 
-L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
-qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
-pas un voile bleu.
+C'est `vmax` qui décide de ce qui s'affiche : rien n'est peint en dessous, et la
+couleur monte avec ce qui dépasse. L'exposant ne règle que la vitesse de cette
+montée, l'écrêtage que la **couleur**. La page pré-remplit `vmax` depuis la table
+par couche de `live.js` (`l2: 20`, `l3: 10`, `l4: 260`, `l3-l4: 150–200`), qui
+suit les cases cochées à gauche ; le champ reste réglable en direct.
+
+### Pourquoi `sortie = couleur × a + vignette × (1 − a)`
+
+Les deux poids somment à 1 : chaque pixel de sortie est un point du segment entre
+la couleur du jet et le pixel filmé. C'est une combinaison convexe, et c'est tout
+ce qu'on lui demande.
+
+- **Rien ne déborde.** Une simple somme `couleur + vignette` sortirait de
+  [0, 255] et écrêterait vers le blanc — deux zones franchement différentes
+  rendraient le même blanc cramé. Une combinaison convexe reste entre ses deux
+  bornes, donc dans l'octet, sans clip et sans virage de teinte.
+- **Un seul curseur, continu, d'un bout à l'autre.** `a` = 0 rend la vignette au
+  pixel près, `a` = 1 la couleur seule, et la transition entre les deux est
+  continue : pas de seuil où l'image saute.
+- **`a` varie par pixel.** C'est ce qui sépare la formule d'un
+  `cv2.addWeighted`, qui applique un `a` global et voile la scène entière, fond
+  calme compris. Ici `a` vaut 0 partout où le score ne dépasse pas `vmax` : le
+  décor traverse intact, seule la tache se teinte, et on voit du même coup *ce
+  qui* est signalé et *où c'est* dans la scène. Un masque binaire — peindre ou ne
+  pas peindre — découperait la tache au ciseau et perdrait son intensité ; le
+  fondu la fait porter par la couleur.
+
+`a` est de forme (H, W, 1), diffusé sur les trois canaux : le même poids pour B,
+G et R. Un `a` par canal doserait les couleurs les unes contre les autres au lieu
+de doser le mélange.
 
 ## Cadence live — coût d'une frame
 

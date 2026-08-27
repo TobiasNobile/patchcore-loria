@@ -158,7 +158,7 @@ button:disabled { opacity: .35; cursor: default; }
    une source basse définition étirée reste plus utile qu'une vignette nette —
    d'où `image-rendering: pixelated` sur #cam.
    Une soustraction plutôt qu'une fraction de la hauteur : ce qui vit sous le
-   carré (score, état, lissage, alpha) coûte une hauteur fixe. Un `58vh`
+   carré (score, état, lissage, opacité) coûte une hauteur fixe. Un `58vh`
    déborderait à 800 px de haut et gâcherait la place à 1200. `min()` garde la
    colonne et 640 px comme plafonds.
    Une variable, parce que les réglages sous la caméra se calent sur la même

@@ -107,9 +107,12 @@
           vidéo<span id="smoothnow"></span></small></span>
       </label>
 
-      <label for="alpha">Alpha<small>0 = heatmap pleine · 1 = seul l'anormal reste</small></label>
+      <!-- L'exposant du canal alpha : opacité = (score / vmax - 1) ** alpha,
+           nulle sous vmax. À 1 le fondu est linéaire, à 0 tout est peint. -->
+      <label for="alpha">Opacité<small>exposant du canal alpha ·
+        0 = heatmap pleine</small></label>
       <div class="slider">
-        <input id="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.71">
+        <input id="alpha" class="live" type="range" min="0" max="1" step="0.02" value="0.5">
         <output id="alphaval" for="alpha">—</output>
       </div>
     </div>

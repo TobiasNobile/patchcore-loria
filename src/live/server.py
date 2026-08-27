@@ -30,14 +30,15 @@ import numpy as np
 from live.scoring import (  # isort: skip
     FAISS_NUM_WORKERS,
     FAISS_ON_GPU,
+    HEATMAP_ALPHA,
     HEATMAP_VMAX,
-    HEATMAP_VMIN,
     SMOOTHING_MODES,
     SMOOTHING_SECONDS,
     SMOOTHING_SECONDS_MAX,
     aggregate,
     calculer_nb_heatmaps,
     build_transform,
+    overlay_heatmap,
     preprocess,
 )
 
@@ -106,17 +107,6 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 VIDEOS_DIR = os.path.join("data", "videos", "uploads")
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v")
 
-# Exposant du canal alpha et son plafond ; la page en déduit la course du curseur.
-HEATMAP_ALPHA = 2.0
-HEATMAP_ALPHA_MAX = 4.0
-
-# Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
-COLORMAP_LOW = 0.1
-COLORMAP_HIGH = 0.9
-
-# Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
-OPACITY_MAX = 0.9
-
 # Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
 # il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
 # rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
@@ -129,8 +119,8 @@ MAX_SKIP_FRAMES = 60
 
 
 def clamp_alpha(value):
-    """Un exposant négatif inverserait la rampe et sortirait l'alpha de [0, 1]."""
-    return min(max(float(value), 0.0), HEATMAP_ALPHA_MAX)
+    """L'exposant du canal alpha vit dans [0, 1]."""
+    return min(max(float(value), 0.0), 1.0)
 
 
 def clamp_zoom(value):
@@ -153,23 +143,6 @@ def clean_dataset(name):
     """
     base = os.path.basename(str(name).replace("\\", "/").rstrip("/"))
     return "".join(c for c in base if c.isprintable())[:80]
-
-
-def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
-    """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
-    
-    `alpha` est un exposant appliqué par pixel, pas un poids de mélange.
-    """
-    normalized = np.clip(
-        (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
-    )
-    # Couleur et opacité bornées séparément : l'alpha suit la valeur brute.
-    ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
-    colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    # (H, W, 1) diffusé sur les 3 canaux BGR.
-    a = (normalized.astype(np.float32) ** alpha)[:, :, None] * OPACITY_MAX
-    return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
 def find_banks():
@@ -237,8 +210,8 @@ class Runner:
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
-            "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "alpha": HEATMAP_ALPHA, "stride": 1, "smoothing": "none",
+            "zoom": 1.0, "vmax": HEATMAP_VMAX, "alpha": HEATMAP_ALPHA,
+            "stride": 1, "smoothing": "none",
             "smoothing_seconds": SMOOTHING_SECONDS,
         }
 
@@ -252,9 +225,8 @@ class Runner:
     def update_live(self, fields):
         """Zoom / échelle couleur / opacité / stride, ajustables en marche."""
         with self._lock:
-            for k in ("vmin", "vmax"):
-                if fields.get(k) is not None:
-                    self._live[k] = float(fields[k])
+            if fields.get("vmax") is not None:
+                self._live["vmax"] = float(fields["vmax"])
             if fields.get("zoom") is not None:
                 self._live["zoom"] = clamp_zoom(fields["zoom"])
             if fields.get("alpha") is not None:
@@ -288,13 +260,10 @@ class Runner:
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # La page n'envoie que l'exposant : on inverse son mappage.
-        slider = (alpha / HEATMAP_ALPHA_MAX) ** 0.5 if HEATMAP_ALPHA_MAX else 0.0
+        # L'exposant est la position même du curseur : un seul nombre au nom.
         path = os.path.join(
             out_dir,
-            "cap_{}_s{:.2f}_a{:.2f}.jpg".format(
-                int(time.time() * 1000), slider, alpha
-            ),
+            "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha),
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
@@ -327,9 +296,8 @@ class Runner:
             # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
             self._live = {
                 "zoom": clamp_zoom(params.get("zoom", 1.0)),
-                "vmin": HEATMAP_VMIN,
                 "vmax": float(params.get("vmax", HEATMAP_VMAX)),
-                "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
+                "alpha": clamp_alpha(params.get("alpha", HEATMAP_ALPHA)),
                 "stride": max(1, int(params.get("stride", 1))),
                 "smoothing": params.get("smoothing", "none"),
                 "smoothing_seconds": clamp_seconds(
@@ -565,8 +533,7 @@ class Runner:
 
                 with self._lock:
                     zoom = self._live["zoom"]
-                    vmin, vmax = self._live["vmin"], self._live["vmax"]
-                    alpha = self._live["alpha"]
+                    vmax, alpha = self._live["vmax"], self._live["alpha"]
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
                     seconds = self._live["smoothing_seconds"]
@@ -603,7 +570,7 @@ class Runner:
                 # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, shown, vmin, vmax, alpha),
+                    ".jpg", overlay_heatmap(preview, shown, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -686,7 +653,6 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/config":
             banks = find_banks()
             self._json({
-                "alpha_max": HEATMAP_ALPHA_MAX,
                 "alpha_default": HEATMAP_ALPHA,
                 "zoom_max": ZOOM_MAX,
                 "faiss_threads": FAISS_NUM_WORKERS,

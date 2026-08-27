@@ -1,4 +1,4 @@
-"""Ce qui se passe sur une frame : prétraitement, agrégation, réglages faiss.
+"""Ce qui se passe sur une frame : prétraitement, rendu, agrégation, faiss.
 
 Séparé de `live.server`, qui n'en fait qu'un usage : le serveur orchestre des
 requêtes et des threads, ces fonctions-ci ne connaissent qu'une image et une
@@ -20,9 +20,17 @@ import torch  # noqa: F401  avant patchcore/faiss : l'ordre inverse fait abort l
 from PIL import Image
 from torchvision import transforms
 
-# Échelle fixe : un autoscale par image ferait clignoter la heatmap.
-HEATMAP_VMIN = 0.0
+# Pied de la couleur : rien n'est peint sous vmax, et la couleur monte avec ce
+# qui dépasse. Échelle fixe — un autoscale par image ferait clignoter la heatmap.
 HEATMAP_VMAX = 10.0
+
+# Exposant du canal alpha, dans [0, 1] : 1 laisse le fondu linéaire, 0 peint
+# tout à l'opacité pleine. Position d'entrée du curseur, réglable en direct.
+HEATMAP_ALPHA = 0.5
+
+# Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
+COLORMAP_LOW = 0.1
+COLORMAP_HIGH = 0.9
 
 # Profondeur des agrégations optionnelles, en frames scorées.
 # Le lissage se raisonne en temps de scène, pas en nombre de cartes : à stride 3
@@ -38,6 +46,28 @@ FAISS_ON_GPU = os.environ.get("INFER_FAISS_GPU", "").lower() in ("1", "true", "y
 # Ramené à 1 sur macOS par FaissNN, où le multi-thread segfault.
 FAISS_NUM_WORKERS = int(os.environ.get(
     "INFER_FAISS_THREADS", "1" if platform.system() == "Darwin" else "4"))
+
+
+def normalize_heatmap(heatmap, vmax):
+    """Ce qui dépasse vmax, en fraction de vmax : max(heatmap / vmax - 1, 0)."""
+    return np.maximum(
+        np.asarray(heatmap, np.float32) / max(float(vmax), 1e-6) - 1.0, 0.0
+    )
+
+
+def overlay_heatmap(preview_rgb, heatmap, vmax, alpha):
+    """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
+
+    Canal alpha = normalisé ** alpha : rien n'est peint sous vmax, et l'exposant
+    décide de la vitesse à laquelle la couleur monte au-dessus.
+    """
+    normalized = normalize_heatmap(heatmap, vmax)
+    ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
+    colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
+    # (H, W, 1) diffusé sur les 3 canaux BGR.
+    a = np.clip(normalized ** float(alpha), 0.0, 1.0)[:, :, None]
+    return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
 def calculer_nb_heatmaps(fps, stride, seconds=SMOOTHING_SECONDS):
