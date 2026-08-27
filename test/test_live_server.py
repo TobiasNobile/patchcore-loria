@@ -107,3 +107,40 @@ def test_end_test_ne_touche_pas_a_l_arret(runner):
 
     assert runner._fin_test.is_set()
     assert not runner._stop.is_set()
+
+
+# ─── Le seuil d'affichage ───────────────────────────────────────────────────
+
+def test_sous_le_seuil_l_image_reste_nue():
+    """Une découpe, pas un fondu : sous `seuil × vmax`, rien n'est peint.
+
+    C'est ce que l'exposant d'opacité d'avant ne savait pas faire — il laissait
+    partout un voile, d'autant plus visible que le fond nominal était large.
+    """
+    import numpy as np
+
+    frame = np.full((4, 4, 3), 130, dtype=np.uint8)
+    # Deux moitiés : 30 % de vmax en haut, 90 % en bas.
+    heatmap = np.array([[3.0] * 4, [3.0] * 4, [9.0] * 4, [9.0] * 4], dtype=np.float32)
+
+    sortie = server.overlay_heatmap(frame, heatmap, 0.0, 10.0, 0.7)
+
+    assert (sortie[:2] == 130).all(), "sous le seuil, la vignette doit rester intacte"
+    assert not (sortie[2:] == 130).any(), "au-dessus, la couleur doit couvrir"
+
+
+def test_seuil_nul_peint_toute_la_carte():
+    import numpy as np
+
+    frame = np.full((2, 2, 3), 130, dtype=np.uint8)
+    heatmap = np.zeros((2, 2), dtype=np.float32)
+
+    assert not (server.overlay_heatmap(frame, heatmap, 0.0, 10.0, 0.0) == 130).any()
+    # Le même fond, au moindre seuil non nul, disparaît.
+    assert (server.overlay_heatmap(frame, heatmap, 0.0, 10.0, 0.02) == 130).all()
+
+
+def test_le_seuil_est_borne():
+    assert server.clamp_seuil(-1.0) == 0.0
+    assert server.clamp_seuil(4.0) == 1.0
+    assert server.clamp_seuil(0.7) == 0.7

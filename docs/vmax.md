@@ -111,12 +111,17 @@ champ disparaît alors plutôt que d'afficher une égalité fausse.
 0,80 × 73,1 (mesure hors banque) = 58,4
 ```
 
-Un coefficient à part, et non le curseur alpha, malgré la tentation : alpha est
-un **exposant** d'opacité, `opacité = (score / vmax)^α × 0,9`. Les deux réglages
-sont couplés — à α = 2, un pixel atteint la demi-opacité à 0,71 × vmax, à α = 4 à
-0,84 × vmax — mais par une puissance, pas par un produit. Confier la marge au
-curseur ferait bouger d'un seul geste ce qu'on voit *et* le niveau où ça sature,
-sans plus pouvoir régler l'un sans l'autre.
+Le coefficient place le **haut** de la rampe ; le curseur sous la caméra en coupe
+le **bas**. Ce curseur est un seuil, en fraction de vmax : sous `seuil × vmax`,
+rien n'est dessiné, l'image reste nue — une découpe, pas un fondu. Le score en
+dessous duquel plus rien n'apparaît est donc `seuil × coefficient × mesure`, et
+c'est bien un produit des deux, chacun réglant un bout de la rampe.
+
+C'était auparavant un exposant d'opacité, `(score / vmax)^α`, qui ne rendait
+jamais rien tout à fait invisible : le fond nominal gardait un voile, et il
+fallait pousser α à son maximum pour l'effacer — ce qui écrasait du même coup
+tout ce qui n'était pas au pic. Le seuil sépare les deux questions : jusqu'où va
+la couleur, et à partir d'où on montre quelque chose.
 
 Le serveur applique la même marge de son côté dans les deux cas où la mesure
 arrive après le démarrage — fit online, fin de test — et garde la mesure brute

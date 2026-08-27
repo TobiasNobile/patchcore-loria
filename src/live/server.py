@@ -115,9 +115,13 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 VIDEOS_DIR = os.path.join("data", "videos", "uploads")
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v")
 
-# Exposant du canal alpha et son plafond ; la page en déduit la course du curseur.
-HEATMAP_ALPHA = 2.0
-HEATMAP_ALPHA_MAX = 4.0
+# Seuil d'affichage, en fraction de vmax : sous `seuil x vmax`, rien n'est
+# dessiné du tout. Le curseur de la page est directement cette fraction — à 0,7,
+# seuls les scores au-dessus de 70 % de la borne apparaissent. C'était un
+# exposant d'opacité, qui ne rendait jamais rien tout à fait invisible : le fond
+# nominal gardait un voile, et il fallait pousser l'exposant à 4 pour l'effacer,
+# ce qui écrasait du même coup tout ce qui n'était pas au pic.
+HEATMAP_SEUIL = 0.7
 
 # Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
 COLORMAP_LOW = 0.1
@@ -126,11 +130,11 @@ COLORMAP_HIGH = 0.9
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
-# Marge posée sur une échelle mesurée : vmax = coefficient x mesure. Un
-# coefficient a part, et non le curseur alpha : alpha est un exposant d'opacite,
-# et le lui confier ferait bouger d'un seul geste ce qu'on voit et le niveau ou
-# ca sature, sans plus pouvoir regler l'un sans l'autre. Sous 1, le pic mesure
-# passe au-dessus de la borne et sature franchement ; a 1, il arrive pile dessus.
+# Marge posée sur une échelle mesurée : vmax = coefficient x mesure. Sous 1, le
+# pic mesure passe au-dessus de la borne et sature franchement ; a 1, il arrive
+# pile dessus. C'est le haut de la rampe ; le curseur de seuil, lui, en coupe le
+# bas (cf. HEATMAP_SEUIL). Deux reglages pour les deux bouts, separes a dessein :
+# un seul curseur pour les deux ne permettrait plus d'en bouger un sans l'autre.
 VMAX_COEF_MIN, VMAX_COEF_MAX = 0.1, 2.0
 
 
@@ -158,9 +162,9 @@ ZOOM_MAX = 8.0
 MAX_SKIP_FRAMES = 60
 
 
-def clamp_alpha(value):
-    """Un exposant négatif inverserait la rampe et sortirait l'alpha de [0, 1]."""
-    return min(max(float(value), 0.0), HEATMAP_ALPHA_MAX)
+def clamp_seuil(value):
+    """Une fraction de vmax : hors de [0, 1] elle ne désigne plus rien d'affichable."""
+    return min(max(float(value), 0.0), 1.0)
 
 
 def clamp_zoom(value):
@@ -185,20 +189,24 @@ def clean_dataset(name):
     return "".join(c for c in base if c.isprintable())[:80]
 
 
-def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
+def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, seuil):
     """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
-    
-    `alpha` est un exposant appliqué par pixel, pas un poids de mélange.
+
+    `seuil` est une fraction de vmax : un pixel sous `seuil x vmax` n'est pas
+    dessiné, l'image reste nue dessous. Au-dessus, il est peint à l'opacité
+    pleine, la rampe jet portant seule la gradation — c'est une découpe, pas un
+    fondu, et c'est ce qui permet de ne montrer que ce qui dépasse.
     """
     normalized = np.clip(
         (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
     )
-    # Couleur et opacité bornées séparément : l'alpha suit la valeur brute.
+    # La couleur est écrêtée aux deux bouts du jet, inexploitables ; le seuil,
+    # lui, porte sur la valeur brute.
     ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
     colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     # (H, W, 1) diffusé sur les 3 canaux BGR.
-    a = (normalized.astype(np.float32) ** alpha)[:, :, None] * OPACITY_MAX
+    a = (normalized >= seuil).astype(np.float32)[:, :, None] * OPACITY_MAX
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
@@ -316,7 +324,7 @@ class Runner:
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
             "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "alpha": HEATMAP_ALPHA, "stride": 1, "smoothing": "none",
+            "seuil": HEATMAP_SEUIL, "stride": 1, "smoothing": "none",
             "smoothing_seconds": SMOOTHING_SECONDS,
         }
 
@@ -335,8 +343,8 @@ class Runner:
                     self._live[k] = float(fields[k])
             if fields.get("zoom") is not None:
                 self._live["zoom"] = clamp_zoom(fields["zoom"])
-            if fields.get("alpha") is not None:
-                self._live["alpha"] = clamp_alpha(fields["alpha"])
+            if fields.get("seuil") is not None:
+                self._live["seuil"] = clamp_seuil(fields["seuil"])
             if fields.get("stride") is not None:
                 self._live["stride"] = max(1, int(fields["stride"]))
             if fields.get("smoothing") in SMOOTHING_MODES:
@@ -354,7 +362,7 @@ class Runner:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
             meta = self._bank_meta or {}
-            alpha, vmax = self._live["alpha"], self._live["vmax"]
+            seuil, vmax = self._live["seuil"], self._live["vmax"]
         if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
@@ -366,13 +374,10 @@ class Runner:
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # La page n'envoie que l'exposant : on inverse son mappage.
-        slider = (alpha / HEATMAP_ALPHA_MAX) ** 0.5 if HEATMAP_ALPHA_MAX else 0.0
+        # Le seuil est la position même du curseur : un seul nombre au nom.
         path = os.path.join(
             out_dir,
-            "cap_{}_s{:.2f}_a{:.2f}.jpg".format(
-                int(time.time() * 1000), slider, alpha
-            ),
+            "cap_{}_s{:.2f}.jpg".format(int(time.time() * 1000), seuil),
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
@@ -420,7 +425,7 @@ class Runner:
             "zoom": clamp_zoom(params.get("zoom", 1.0)),
             "vmin": HEATMAP_VMIN,
             "vmax": float(params.get("vmax", HEATMAP_VMAX)),
-            "alpha": float(params.get("alpha", HEATMAP_ALPHA)),
+            "seuil": clamp_seuil(params.get("seuil", HEATMAP_SEUIL)),
             "stride": max(1, int(params.get("stride", 1))),
             "smoothing": params.get("smoothing", "none"),
             "smoothing_seconds": clamp_seconds(
@@ -696,7 +701,7 @@ class Runner:
         # zoom et lissage retomberaient sur ceux du formulaire, et l'image
         # changerait entre la calibration et ce qu'elle est censée calibrer.
         with self._lock:
-            for champ in ("zoom", "alpha", "stride", "smoothing",
+            for champ in ("zoom", "seuil", "stride", "smoothing",
                           "smoothing_seconds"):
                 suite[champ] = self._live[champ]
         return suite
@@ -933,7 +938,7 @@ class Runner:
                 with self._lock:
                     zoom = self._live["zoom"]
                     vmin, vmax = self._live["vmin"], self._live["vmax"]
-                    alpha = self._live["alpha"]
+                    seuil = self._live["seuil"]
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
                     seconds = self._live["smoothing_seconds"]
@@ -987,7 +992,7 @@ class Runner:
                 # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, shown, vmin, vmax, alpha),
+                    ".jpg", overlay_heatmap(preview, shown, vmin, vmax, seuil),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -1073,8 +1078,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/config":
             banks = find_banks()
             self._json({
-                "alpha_max": HEATMAP_ALPHA_MAX,
-                "alpha_default": HEATMAP_ALPHA,
+                "seuil_default": HEATMAP_SEUIL,
                 "zoom_max": ZOOM_MAX,
                 "faiss_threads": FAISS_NUM_WORKERS,
                 "faiss_gpu": FAISS_ON_GPU,
@@ -1280,9 +1284,9 @@ class Handler(BaseHTTPRequestHandler):
                     "zoom": clamp_zoom(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
                     "vmax_coef": clamp_coef(params.get("vmax_coef") or 1.0),
-                    # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
-                    "alpha": HEATMAP_ALPHA if params.get("alpha") is None
-                             else clamp_alpha(params["alpha"]),
+                    # `or` interdit : seuil=0 est une valeur voulue (heatmap pleine).
+                    "seuil": HEATMAP_SEUIL if params.get("seuil") is None
+                             else clamp_seuil(params["seuil"]),
                     "smoothing": (params.get("smoothing")
                                   if params.get("smoothing") in SMOOTHING_MODES
                                   else "none"),
@@ -1339,8 +1343,8 @@ class Handler(BaseHTTPRequestHandler):
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),
                     "vmax_coef": clamp_coef(p.get("vmax_coef") or 1.0),
-                    "alpha": HEATMAP_ALPHA if p.get("alpha") is None
-                             else clamp_alpha(p["alpha"]),
+                    "seuil": HEATMAP_SEUIL if p.get("seuil") is None
+                             else clamp_seuil(p["seuil"]),
                     "smoothing": (p.get("smoothing")
                                   if p.get("smoothing") in SMOOTHING_MODES else "none"),
                     "smoothing_seconds": clamp_seconds(

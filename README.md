@@ -70,7 +70,8 @@ déposée dans `coresets/` est trouvée au démarrage suivant.
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
 détecter, et « Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
-— source, stride, échelle couleur et alpha se règlent pendant que ça tourne.
+— source, stride, échelle couleur et seuil d'affichage se règlent pendant que ça
+tourne.
 
 Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
 endroit où torch est sûr sur macOS.
@@ -177,11 +178,15 @@ captures. Aucune ne touche aux scores.
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
 | `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
+| `HEATMAP_SEUIL` = 0,7 | position d'entrée du curseur de seuil, en fraction de vmax : sous `seuil × vmax`, la heatmap n'est pas dessinée du tout. Réglable en direct |
 | `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `src/live/scoring.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
 
-L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, ce
-qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
-pas un voile bleu.
+L'écrêtage porte sur la **couleur seule**. Le seuil, lui, porte sur la valeur
+brute, et c'est une découpe et non un fondu : sous lui rien n'est peint, l'image
+reste nue ; au-dessus, la couleur couvre à l'opacité pleine et la rampe jet porte
+seule la gradation. Mesuré sur une frame à vmax 73, la part de carte peinte passe
+de 100 % (seuil 0) à 50 % (0,50), 13 % (0,70) et 0,2 % (0,90) — c'est ce réglage
+qui décide de ce qu'on montre, pas l'échelle.
 
 ### `vmax`, mesuré au fit (branche `stage`)
 

@@ -4,14 +4,14 @@ const $ = (id) => document.getElementById(id);
 const liveForm = $("params");
 const fitForm = $("fit");
 // Pris sur les deux conteneurs, pas sur le <form> : les réglages d'affichage
-// vivent hors de lui — certains dans le panneau de droite, lissage et alpha sous
+// vivent hors de lui — certains dans le panneau de droite, lissage et seuil sous
 // la caméra. Sans les deux, ceux du bas ne seraient pas figés pendant un fit.
 const liveFields = [...document.querySelectorAll(
   "#livepanel input, #livepanel select, #stagecontrols input")];
 
-// Course du curseur alpha : exposant = MAX * s². Quadratique pour placer la
-// diagonale (n^1) pile au milieu, s=0 donnant la heatmap pleine (n^0).
-let ALPHA_MAX = 4, ALPHA_DEFAULT = 2;
+// Seuil d'affichage, en fraction de vmax : le curseur est directement cette
+// fraction, rien à mapper. Sous `seuil × vmax`, la heatmap n'est pas dessinée.
+let SEUIL_DEFAULT = 0.7;
 // Durée de scène visée par le lissage ; le nombre de cartes en découle côté
 // serveur, avec le fps de la source et le stride — la page ne fait que l'afficher.
 let SMOOTHING_SECONDS = 1 / 3;
@@ -23,13 +23,17 @@ let BANKS = {};
 const esc = (s) => String(s).replace(
   /[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const alphaExp = () => ALPHA_MAX * Math.pow(parseFloat($("alpha").value), 2);
+const seuilValue = () => parseFloat($("seuil").value);
 
-function alphaRender() {
-  const e = alphaExp();
-  $("alphaval").textContent =
-    parseFloat($("alpha").value).toFixed(2) + " · n^" + e.toFixed(1);
-  return e;
+// Le curseur porte une fraction ; ce qu'on lit sur l'image est un score. Les deux
+// sont affichés — la fraction pour retrouver sa position, le score parce que
+// c'est lui qu'on compare au nombre sous la caméra.
+function seuilRender() {
+  const s = seuilValue();
+  const vmax = parseFloat($("vmax").value);
+  $("seuilval").textContent = s.toFixed(2)
+    + (vmax > 0 ? ` · ≥ ${fmtVmax(s * vmax)}` : "");
+  return s;
 }
 
 // Une route que le serveur ne connaît pas répond « not found » en texte brut.
@@ -66,7 +70,7 @@ function readParams() {
     // Le serveur applique la mesure lui-même quand elle arrive après le
     // démarrage (fit online, fin de test) : il lui faut la même marge.
     vmax_coef: vmaxCoef(),
-    alpha: alphaExp(),
+    seuil: seuilValue(),
     smoothing: smoothingMode(),
     smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
     loop: $("loop").checked,
@@ -576,11 +580,14 @@ $("vmax_coef").addEventListener("input", () => {
 $("vmax").addEventListener("input", () => {
   VMAX_FROM_CALIB = false;
   renderVmaxCalc();
+  // Le seuil est une fraction de vmax : le score sous lequel rien ne s'affiche
+  // suit, et le curseur doit le redire.
+  seuilRender();
 });
 
 $("smoothwin").addEventListener("input", () =>
   post("/api/update", { smoothing_seconds: parseFloat($("smoothwin").value || "0.3") }));
-$("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
+$("seuil").addEventListener("input", () => post("/api/update", { seuil: seuilRender() }));
 
 // Une seule case, donc un seul mode : le maximum. La moyenne stabilisait mais
 // diluait un objet vu sur une seule frame — l'inverse de ce qu'on cherche ici.
@@ -769,9 +776,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   const cfg = await (await fetch("/api/config")).json();
   // `??` et non `=` : une clé absente — page chargée contre une version
   // antérieure du serveur — laisserait sinon un undefined s'afficher, ou un NaN
-  // se propager dans la course de l'alpha.
-  ALPHA_MAX = cfg.alpha_max ?? ALPHA_MAX;
-  ALPHA_DEFAULT = cfg.alpha_default ?? ALPHA_DEFAULT;
+  // se propager dans le seuil.
+  SEUIL_DEFAULT = cfg.seuil_default ?? SEUIL_DEFAULT;
   // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
   // avant l'envoi, une valeur trop haute ne rendant qu'une bouillie floue.
   if (cfg.zoom_max) $("zoom").max = cfg.zoom_max;
@@ -803,8 +809,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 
   fillBanks(cfg.banks, cfg.default_bank);
 
-  $("alpha").value = Math.sqrt(ALPHA_DEFAULT / ALPHA_MAX);
-  alphaRender();
+  $("seuil").value = SEUIL_DEFAULT;
+  seuilRender();
 
   refresh();
   setInterval(refresh, 300);
