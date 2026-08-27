@@ -102,9 +102,12 @@ def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
               help="Effet miroir sur l'aperçu, plus naturel face à une webcam.")
 @click.option("--loop/--no-loop", default=False, show_default=True,
               help="Rejouer en boucle une source fichier (sans effet sur une caméra).")
-@click.option("--vmax", default=HEATMAP_VMAX, show_default=True,
-              help="Borne haute de couleur du heatmap. L'échelle des scores dépend "
-                   "de la couche : ~10 (layer3), ~20 (layer2), ~260 (layer4).")
+@click.option("--vmax", default=None, type=float,
+              help="Borne haute de couleur du heatmap. Par défaut, l'échelle "
+                   "mesurée au fit sur les images hors banque, quand la banque "
+                   "en porte une ; sinon {:g}. Sans mesure, l'échelle des scores "
+                   "dépend de la couche : ~10 (layer3), ~20 (layer2), "
+                   "~260 (layer4).".format(HEATMAP_VMAX))
 @click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
               help="Borne basse de couleur du heatmap.")
 def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
@@ -116,6 +119,16 @@ def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
     )
     patchcore.utils.fix_seeds(fit_config["seed"])
     transform = build_transform(fit_config)
+
+    # Sans --vmax, l'échelle de la banque : le plus grand score des images
+    # normales gardées hors du fit. Une banque d'avant la calibration n'en porte
+    # pas, on retombe alors sur la constante.
+    if vmax is None:
+        mesure = (fit_config.get("vmax_holdout") or {}).get("vmax")
+        vmax = float(mesure) if mesure else HEATMAP_VMAX
+        if mesure:
+            LOGGER.info("vmax %.2f, mesuré au fit sur %d images hors banque.",
+                        vmax, fit_config["vmax_holdout"].get("n_images", 0))
 
     capture = cv2.VideoCapture(int(source) if source.isdigit() else source)
     if not capture.isOpened():

@@ -183,6 +183,30 @@ L'écrêtage porte sur la **couleur seule** ; l'opacité suit la valeur brute, c
 qui laisse le fond normal parfaitement intact — un score nul rend l'image nue,
 pas un voile bleu.
 
+### `vmax`, mesuré au fit (branche `stage`)
+
+La borne haute de la rampe est une distance, sans unité, dont l'ordre de grandeur
+change avec la couche, le backbone **et la scène**. Elle n'est donc plus devinée :
+le fit repasse à travers la banque les 20 % d'images normales gardées hors banque
+et retient le plus grand de leurs scores. La valeur part dans `fit_config.json`
+(`vmax_holdout`), donc dans le `.pkg`, et la page pré-remplit le champ avec elle
+en disant sur combien d'images elle a été mesurée. Le champ reste réglable en
+direct, et une banque construite avant cet ajout retombe sur la table par couche
+de `live.js`, en l'annonçant.
+
+Au-dessus de cette valeur, la rampe sature : c'est le pire nominal observé, donc
+le niveau au-delà duquel ce qui passe devant la caméra ne ressemble plus à rien
+de connu de la scène. La passe coûte une inférence par image de holdout, plafonnée
+à 200 (`FIT_CALIB_IMAGES`, 0 pour couper). Réserve à connaître en mode « Filmer
+maintenant » : le holdout y est fait de frames voisines de celles de la banque,
+l'échelle obtenue est un plancher optimiste.
+
+La case **Self-calibrating VMax**, dans ce même mode, prend l'échelle par l'autre
+bout : après la banque, on filme l'**anomalie**, un bouton clôt le test, et le
+**p90 des scores du test** devient le VMax — pas le pic, qu'une seule frame bien
+cadrée suffirait à porter trop haut. Détail des deux échelles et relevés dans
+[docs/vmax.md](docs/vmax.md).
+
 ## Cadence live — coût d'une frame
 
 Banque « personne + couteau » (COCO, layer3 + layer4, 20 000 images de fit,

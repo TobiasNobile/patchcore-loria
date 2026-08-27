@@ -73,13 +73,26 @@ function readParams() {
   };
 }
 
-// Ordres de grandeur du score de patch selon la couche extraite : l'échelle
-// change d'un facteur ~25 entre layer3 et layer4, un vmax repris d'une autre
-// couche donne une heatmap uniformément bleue ou saturée. Indicatif : la valeur
-// dépend aussi du backbone et de la taille d'image. Une paire [min, max] là où
-// la plage utile est trop large pour se réduire à un point ; le champ est
-// pré-rempli avec sa borne basse.
+// Repli pour les banques non calibrées. Ordres de grandeur du score de patch
+// selon la couche extraite : l'échelle change d'un facteur ~25 entre layer3 et
+// layer4, un vmax repris d'une autre couche donne une heatmap uniformément bleue
+// ou saturée. Indicatif, et aveugle à la scène : la valeur dépend aussi du
+// backbone, de la taille d'image et de ce qu'il y a devant la caméra. Une paire
+// [min, max] là où la plage utile est trop large pour se réduire à un point ; le
+// champ est pré-rempli avec sa borne basse.
 const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 10, "l3-l4": [150, 200] };
+
+// Le champ accepte le dixième : une échelle mesurée ne tombe pas sur un entier,
+// et l'arrondir à l'unité déplacerait la saturation sur les petites échelles.
+const fmtVmax = (v) => Math.round(v * 10) / 10;
+
+// Les couches de ce qu'on s'apprête à scorer — celles de la banque chargée, ou
+// celles cochées pour le prochain fit. Cf. showVmaxHint.
+let VMAX_LAYERS = "";
+// L'échelle mesurée que porte la banque chargée, ou null. Cf. renderVmaxHint.
+let VMAX_CALIB = null;
+// Quantile des scores du test qui fait le vmax auto-calibré, relu de /api/config.
+let CALIB_P = 90;
 
 // Vrai pendant le scoring. Le champ vmax ne se laisse pré-remplir qu'à l'arrêt :
 // en marche, la valeur affichée est celle que l'utilisateur a réglée à l'œil, et
@@ -91,21 +104,79 @@ let RUNNING = false;
 // Les couches, écrites comme la banque les nomme : layer3 -> l3.
 const layerKey = (layers) => layers.map((l) => l.replace("layer", "l")).join("-");
 
-// Une seule écriture du couple aide + champ, appelée aussi bien par la banque
-// choisie que par les cases du fit : le vmax utile ne dépend que des couches, et
-// il vaut mieux qu'il suive celles qu'on s'apprête à scorer.
-function showVmaxHint(layers) {
+// L'aide du champ vmax tient deux choses, qui arrivent séparément : l'échelle
+// mesurée de la banque chargée (avec la banque) et le repère de table des
+// couches en jeu (avec les cases du fit). Elles sont donc mémorisées, sinon
+// chacune effacerait l'autre — les mesures livrées par un fit ou par un test
+// arrivent sans couches, et les cases arrivent sans mesure.
+function tableRange(layers) {
   const hint = VMAX_HINT[layers];
-  const range = hint === undefined ? null : [].concat(hint);
-  $("vmaxhint").textContent = range
-    ? `${range.join("–")} pour ${layers}` : "inconnu pour " + (layers || "?");
+  return hint === undefined ? null : [].concat(hint);
+}
+
+function renderVmaxHint() {
+  const range = tableRange(VMAX_LAYERS);
+  const table = range ? `${range.join("–")} pour ${VMAX_LAYERS}` : null;
+  const c = VMAX_CALIB;
+  // Deux mesures possibles, qui ne disent pas la même chose : le plafond du
+  // normal (holdout du fit) ou le pic de l'anomalie jouée (phase de test).
+  const mesure = !c ? null
+    : c.test ? `${fmtVmax(c.vmax)} — p${c.p ?? 90} des scores du test`
+    : `mesuré ${fmtVmax(c.vmax)}`
+      + (c.n_images ? ` sur ${c.n_images} image${c.n_images > 1 ? "s" : ""} hors banque` : "");
+  // « table » n'est écrit que face à une mesure, qu'il sert à situer : seul, le
+  // repère de couche est la seule chose affichée, il n'a rien à distinguer.
+  $("vmaxhint").textContent = mesure
+    ? [mesure, table && "table " + table].filter(Boolean).join(" · ")
+    : table || ("inconnu pour " + (VMAX_LAYERS || "?"));
+}
+
+// L'échelle que porte une banque : proposée dans le champ, sauf en marche — la
+// valeur affichée est alors celle qu'on a réglée à l'œil, la réécrire changerait
+// l'image sous les yeux. `force` est l'exception : un fit ou un test qui vient
+// de livrer son échelle, sur un champ que personne n'a encore touché.
+function showVmaxHint(layers, calib, force) {
+  if (layers) VMAX_LAYERS = layers;
+  VMAX_CALIB = calib && calib.vmax ? calib : null;
+  renderVmaxHint();
+  if (VMAX_CALIB) {
+    if (!RUNNING || force) $("vmax").value = fmtVmax(VMAX_CALIB.vmax);
+    return;
+  }
+  const range = tableRange(VMAX_LAYERS);
   if (range && !RUNNING) $("vmax").value = range[0];
 }
 
+// Les cases de couche, elles, sont un geste explicite : elles l'emportent sur
+// toute échelle mesurée et s'appliquent même en marche — cocher layer4 change
+// l'ordre de grandeur des scores d'un facteur ~25, et c'est le moyen le plus
+// direct de reprendre la table sans taper le nombre. La mesure de la banque
+// reste affichée à côté, pour qu'on sache ce qu'on vient d'écarter.
+function vmaxFromLayers(layers) {
+  VMAX_LAYERS = layers;
+  renderVmaxHint();
+  const range = tableRange(layers);
+  if (!range) return;
+  $("vmax").value = range[0];
+  // Écrire le champ sans le dire au serveur laisserait la heatmap sur l'ancienne
+  // échelle : le champ mentirait sur ce qui est appliqué.
+  if (RUNNING) post("/api/update", { vmax: range[0] });
+}
+
 // ─── Bandeau de banque ─────────────────────────────────────────────────────
+// Ce que le bandeau montre déjà : il est réécrit trois fois par seconde sinon,
+// et le sélecteur se disputerait l'affichage avec la banque en cours de scoring.
+let bandeau = null;
+
 function showBank(dir) {
-  const m = BANKS[dir];
-  $("bankname").textContent = m ? m.name : "aucune banque";
+  renderBank(BANKS[dir], "sel:" + dir);
+}
+
+function renderBank(m, cle) {
+  if (cle === bandeau) return;
+  bandeau = cle;
+  $("bankname").textContent = m
+    ? m.name + (m.stored === false ? " · non stockée" : "") : "aucune banque";
   if (!m) { $("chips").innerHTML = ""; return; }
   // Les banques d'avant l'ajout de ces champs n'ont pas tout : une puce vide
   // vaut mieux qu'un « 0.00 Go » faux.
@@ -121,6 +192,10 @@ function showBank(dir) {
     ["banque", m.bank_size ? num(m.bank_size) + " vect." : null],
     ["taille", m.bank_gb ? m.bank_gb.toFixed(2) + " Go" : null],
     ["images fit", num(m.train_images)],
+    // Ce que la banque sait de sa propre échelle : le pire score nominal hors
+    // banque, et sur combien d'images il a été pris. Vide pour une banque
+    // d'avant la calibration, qui retombe sur la table par couche.
+    ["vmax", m.vmax ? fmtVmax(m.vmax) + (m.vmax_images ? ` · ${m.vmax_images} img` : "") : null],
   ];
   $("chips").innerHTML = chips
     .filter(([, v]) => v)
@@ -129,11 +204,14 @@ function showBank(dir) {
     .map(([k, v]) => `<div class="chip"><span>${k}</span><b>${esc(v)}</b></div>`)
     .join("");
 
-  showVmaxHint(m.layers);
+  showVmaxHint(m.layers, { vmax: m.vmax, n_images: m.vmax_images });
 }
 
 function fillBanks(banks, keep) {
   BANKS = Object.fromEntries(banks.map((b) => [b.dir, b]));
+  // Le contenu du sélecteur change : ce que le bandeau montrait n'est plus
+  // forcément à jour, on le laisse se redessiner.
+  bandeau = null;
   $("bank_dir").innerHTML = banks.length
     ? banks.map((b) => `<option value="${b.dir}">${b.name}</option>`).join("")
     : '<option value="">aucune banque dans coresets/</option>';
@@ -163,12 +241,13 @@ $("srcmode").addEventListener("change", () => {
   $("folder").hidden = mode !== "dir";
   $("onlinefields").hidden = mode !== "online";
   $("storefield").hidden = mode !== "online";
+  $("onlinenote").hidden = mode !== "online";
   // En mode online il n'y a rien à envoyer : la caméra fournit les images, et le
   // scoring démarre tout seul sur la banque obtenue.
   $("dofit").textContent = mode === "online" ? "Filmer, fitter, démarrer" : "Fitter";
   // En online, c'est la banque à venir qui sera scorée : le vmax conseillé est
   // celui de ses couches, et non celui de la banque encore sélectionnée.
-  if (mode === "online") showVmaxHint(layerKey(selectedLayers()));
+  if (mode === "online") vmaxFromLayers(layerKey(selectedLayers()));
   $("fiterror").textContent = "";
 });
 
@@ -319,7 +398,7 @@ fitForm.addEventListener("submit", async (e) => {
     // personne n'a l'occasion de le corriger entre le fit et la première frame.
     // On le recale ici, avant de lire les réglages — visible dans le champ, donc
     // ajustable ensuite comme n'importe quel réglage à chaud.
-    showVmaxHint(layerKey(layers));
+    vmaxFromLayers(layerKey(layers));
     // Un seul appel : la page n'a pas à orchestrer prise, fit et scoring, qui
     // occupent de toute façon le même thread côté serveur.
     $("fitstatus").textContent = "Filmage en cours…";
@@ -333,6 +412,9 @@ fitForm.addEventListener("submit", async (e) => {
       duree_s: parseFloat($("duree_s").value || "20"),
       images_par_s: parseFloat($("images_par_s").value || "5"),
       stocker: $("stocker").checked,
+      // Coché, une phase de test s'intercale entre la banque et la démo : on y
+      // filme l'anomalie, et son pic devient le vmax.
+      autocalib: $("selfcalib").checked,
     }));
     if (res.error) { $("fiterror").textContent = res.error; $("fitstatus").textContent = ""; }
     refresh();
@@ -384,12 +466,14 @@ function applyFit(f) {
     const secs = f.seconds ? ` · ${Math.round(f.seconds)} s` : "";
     $("fitstatus").textContent = `${f.phase}${detail}${secs}`;
   } else if (f.name) {
-    // trained < images : FolderDataset garde 20 % du normal hors banque, de
-    // quoi calibrer un seuil. Les deux chiffres, sinon l'écart intrigue.
+    // trained < images : FolderDataset garde 20 % du normal hors banque, et
+    // c'est sur ces images-là que l'échelle vient d'être mesurée. Les deux
+    // chiffres, sinon l'écart intrigue.
     const n = f.trained && f.images && f.trained !== f.images
       ? ` · ${f.trained}/${f.images} images (20 % gardés hors banque)`
       : f.trained ? ` · ${f.trained} images` : "";
-    $("fitstatus").textContent = `${f.name}${n} · ${Math.round(f.seconds)} s`;
+    const v = f.vmax ? ` · vmax ${fmtVmax(f.vmax)}` : "";
+    $("fitstatus").textContent = `${f.name}${n}${v} · ${Math.round(f.seconds)} s`;
   } else if (!f.error) {
     $("fitstatus").textContent = "";
   }
@@ -433,6 +517,13 @@ liveForm.addEventListener("submit", async (e) => {
   refresh();
 });
 $("stop").addEventListener("click", async () => { await post("/api/stop"); refresh(); });
+// Clôt la phase de test en gardant sa mesure — l'inverse d'Arrêter, qui
+// abandonne la séquence entière sans rien retenir.
+$("endtest").addEventListener("click", async () => {
+  $("endtest").disabled = true;   // le serveur met une frame à sortir de sa boucle
+  await post("/api/end_test");
+  refresh();
+});
 $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 
 ["zoom", "vmax", "stride"].forEach((id) => {
@@ -465,6 +556,11 @@ $("snap").addEventListener("click", async () => {
 });
 
 let lastFitName = null;
+// Dernière échelle livrée par un fit, pour ne l'écrire qu'une fois : la relire à
+// chaque poll écraserait le réglage fait à la main juste après. Idem pour celle
+// gardée à la fin d'une phase de test.
+let lastFitVmax = null;
+let lastKept = null;
 // Le flux MJPEG est-il clos ? Vrai au départ, et dès que le serveur cesse de
 // filmer et de scorer : le <img> doit alors être rebranché sur une URL neuve.
 let camCoupe = true;
@@ -498,8 +594,22 @@ function apply(s) {
     s.score === null || s.score === undefined ? "—" : s.score.toFixed(2);
   // « arrêté » sous une image manifestement vivante se lisait comme une panne :
   // depuis que le filmage occupe le grand carré, il lui faut son propre mot.
-  $("status").textContent = s.running ? "en cours"
+  $("status").textContent = s.calibrating ? "test de l'anomalie"
+    : s.running ? "en cours"
     : s.filming ? "filmage" : "arrêté";
+
+  // Phase de test : le bouton porte la valeur qu'on garde en le pressant, et la
+  // voir monter pendant qu'on présente l'anomalie dit quand l'angle est bon.
+  $("endtest").hidden = !s.calibrating;
+  if (s.calibrating) {
+    $("endtest").disabled = false;
+    // La valeur gardée est le p90, pas le pic : les deux sont écrits, l'écart
+    // entre eux dit à lui seul si l'anomalie a été montrée assez longtemps.
+    $("endtest").textContent = s.calib_p90
+      ? `Terminer le test · garder ${fmtVmax(s.calib_p90)} `
+        + `(p${CALIB_P} de ${s.calib_n} scores · pic ${fmtVmax(s.calib_max)})`
+      : "Terminer le test · rien de scoré";
+  }
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
@@ -529,8 +639,22 @@ function apply(s) {
     ? [`${s.device || "…"}`, `${s.fps.toFixed(1)} fps`,
        `${s.infer_ms.toFixed(0)} ms/inf`, `${s.frames} frames`,
        s.source_fps ? `source ${Math.round(s.source_fps)} fps` : null,
+       // Le plafond du normal, mesuré au fit, pendant le seul moment où il sert
+       // de repère : un test qui ne le dépasse pas n'a rien montré d'anormal.
+       s.calibrating && s.calib_bank_vmax
+         ? `max normal ${fmtVmax(s.calib_bank_vmax)}` : null,
        lissage].filter(Boolean).join(" · ")
     : "";
+  // Le bandeau nomme ce qui est scoré, pas ce que le sélecteur montre : une
+  // prise non stockée n'entre dans aucun sélecteur, et le bandeau restait sur
+  // la banque d'avant — d'où « des fois ça marche, des fois pas », selon que la
+  // case « Stocker » était cochée. À l'arrêt, il revient au sélecteur.
+  if ((s.running || s.filming) && s.bank) {
+    renderBank(s.bank, "live:" + s.bank.dir);
+  } else if (!s.running && !s.filming && String(bandeau).startsWith("live:")) {
+    showBank($("bank_dir").value);
+  }
+
   $("error").textContent = s.error || "";
   // Un repli cuda -> cpu est silencieux côté calcul : sans ce bandeau on croit
   // tourner sur GPU alors que non.
@@ -538,6 +662,28 @@ function apply(s) {
   $("notice").hidden = !s.device_note;
 
   const fitting = applyFit(s.fit || {});
+  // L'échelle mesurée par le fit qui vient de finir. En mode online la banque
+  // n'est pas stockée : elle n'entrera jamais dans le sélecteur, donc showBank
+  // ne la portera pas, et le scoring a déjà démarré dessus — d'où l'écriture
+  // forcée, sur un champ que personne n'a encore eu le temps de toucher. Le
+  // serveur applique la même valeur de son côté ; ici c'est pour qu'on la voie.
+  const mesure = (s.fit || {}).vmax;
+  // Un fit qui démarre remet le compteur : sans ça, un second fit rendant la
+  // même valeur au dixième près ne se réécrirait pas dans un champ entre-temps
+  // réglé à la main. Pendant le fit, `vmax` est nul de toute façon.
+  if ((s.fit || {}).running) lastFitVmax = null;
+  if (mesure && mesure !== lastFitVmax) {
+    lastFitVmax = mesure;
+    showVmaxHint(null, { vmax: mesure, n_images: s.fit.vmax_images }, true);
+  }
+  // Le test, quand il a eu lieu, l'emporte sur l'échelle du fit : il vient
+  // après, et c'est lui que le serveur applique. Le serveur garde la valeur
+  // posée pendant tout le scoring, donc rien à surprendre au bon instant — et
+  // rien n'est écrit si le test a été abandonné plutôt que terminé.
+  if (s.calib_kept && s.calib_kept !== lastKept) {
+    lastKept = s.calib_kept;
+    showVmaxHint(null, { vmax: s.calib_kept, test: true, p: CALIB_P }, true);
+  }
   // Une banque qui vient d'être écrite est sélectionnée : c'est celle qu'on
   // veut essayer, et le sélecteur ne l'a pas encore.
   if (s.fit && s.fit.name && s.fit.name !== lastFitName) {
@@ -555,7 +701,11 @@ function apply(s) {
     f.disabled = fitting || (s.running && !f.classList.contains("live"));
   });
   [...fitForm.querySelectorAll("input,select,button")].forEach((f) => {
-    f.disabled = fitting || s.running;
+    // Les cases de couche font exception : elles ne règlent que le prochain fit,
+    // donc rien ne les oblige à être figées pendant le scoring — et c'est par
+    // elles qu'on rappelle l'échelle attendue d'une couche, ce qui n'a d'intérêt
+    // que si on peut le faire en regardant l'image.
+    f.disabled = f.classList.contains("layerbox") ? fitting : fitting || s.running;
   });
   $("start").disabled = s.running || fitting;
   // Le même bouton coupe la boucle ou abandonne le fit — les deux occupent le
@@ -583,17 +733,18 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   $("backbone").innerHTML = cfg.backbones
     .map((b) => `<option value="${b.name}">${b.label}</option>`).join("");
   $("layers").innerHTML = cfg.layers.map((l) => `
-    <label class="check"><input type="checkbox" value="${l}"
+    <label class="check"><input type="checkbox" class="layerbox" value="${l}"
       ${cfg.default_layers.includes(l) ? "checked" : ""}><span>${l}</span></label>`).join("");
   // Après le remplissage des cases, sinon il n'y a rien à écouter. Cocher
   // layer4 change l'échelle des scores d'un facteur ~25 : sans ce rappel, le
   // champ garde le vmax de la banque précédente et la heatmap sort uniforme.
   $("layers").addEventListener("change",
-                               () => showVmaxHint(layerKey(selectedLayers())));
+                               () => vmaxFromLayers(layerKey(selectedLayers())));
   $("coreset_pct").value = cfg.default_coreset_pct;
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
   $("maximages").textContent = MAX_IMAGES;
+  CALIB_P = cfg.calib_percentile ?? CALIB_P;
   SMOOTHING_SECONDS = cfg.smoothing_seconds ?? SMOOTHING_SECONDS;
   $("smoothwin").value = SMOOTHING_SECONDS.toFixed(1);
   if (cfg.smoothing_seconds_max) $("smoothwin").max = cfg.smoothing_seconds_max;

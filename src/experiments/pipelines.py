@@ -164,6 +164,83 @@ def _subset_indices(n_total, n_wanted, seed, random_subset):
     return sorted(rng.choice(n_total, n_wanted, replace=False).tolist())
 
 
+# Plafond d'images du holdout scorées pour calibrer l'échelle : au-delà, la passe
+# coûte plus qu'elle n'apprend, un maximum sur deux cents images ne bougeant
+# presque plus. FIT_CALIB_IMAGES=0 coupe la calibration.
+CALIB_IMAGES = 200
+
+
+def holdout_vmax(instance, spec, cfg, seed, device, extra_config, num_workers):
+    """Le plus grand score nominal hors banque, qui donne l'échelle de la scène.
+
+    La banque dit ce qui est nominal dans l'espace des features ; elle ne dit pas
+    quelle *distance* est normale, et cet ordre de grandeur change avec la
+    couche, le backbone et la scène — d'où un vmax repris d'une autre banque qui
+    rend une heatmap uniformément bleue ou saturée. On le mesure en repassant à
+    travers la banque des images nominales qu'elle n'a jamais vues : le holdout,
+    ces 20 % d'images que folder.py écarte du fit. Une image de la banque serait
+    son propre plus proche voisin et scorerait presque zéro : elle ne mesurerait
+    rien.
+
+    Le maximum plutôt qu'un quantile : c'est le pire nominal observé, donc le
+    niveau au-dessus duquel ce qui passe devant la caméra ne ressemble plus à
+    rien de connu. Sur une vingtaine d'images, un quantile haut n'aurait de toute
+    façon aucun point pour lui.
+
+    Ce que ça ne dit pas : sur une banque filmée d'un coup, le holdout est fait
+    des frames voisines de celles de la banque — des quasi-doublons. L'échelle
+    obtenue est alors un plancher optimiste, pas une borne du normal en général.
+
+    Renvoie None si le dataset n'expose aucun nominal hors banque : l'échelle
+    reste ce qu'elle était, un réglage posé à la main.
+    """
+    plafond = int(os.environ.get("FIT_CALIB_IMAGES", CALIB_IMAGES))
+    if plafond <= 0:
+        return None
+    try:
+        dataset = spec.build(
+            split="test", resize=cfg["resize"], imagesize=cfg["imagesize"],
+            seed=seed, fit_config={**(extra_config or {}), **cfg},
+        )
+        labels = np.asarray(dataset.labels, dtype=int)
+    except Exception as exc:  # noqa: BLE001 - calibrer ne doit jamais tuer un fit
+        LOGGER.warning("Holdout inaccessible (%s) : échelle non calibrée.", exc)
+        return None
+
+    # Le split TEST mêle le holdout et un éventuel anomaly/ : seul le nominal
+    # mesure une échelle du normal.
+    nominal = np.where(labels == 0)[0]
+    if nominal.size == 0:
+        LOGGER.warning("Aucune image nominale hors banque : échelle non calibrée.")
+        return None
+    if nominal.size > plafond:
+        nominal = np.random.RandomState(seed).choice(nominal, plafond, replace=False)
+
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.Subset(dataset, sorted(nominal.tolist())),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+    )
+    scores, cartes, _, _ = instance.predict(loader)
+    scores = np.asarray(scores, dtype=np.float32)
+    # Le score d'image est le max de ses patchs ; la heatmap est ce même champ
+    # flouté et rééchantillonné, dont le pic est plus bas. C'est le score qui
+    # fait le vmax — le nombre affiché sous la caméra et celui de l'échelle sont
+    # alors le même — et le pic de carte est gardé pour situer l'écart.
+    stats = {
+        "vmax": float(scores.max()),
+        "n_images": int(scores.size),
+        "score_median": float(np.median(scores)),
+        "heatmap_max": float(max(np.asarray(c, dtype=np.float32).max() for c in cartes)),
+    }
+    LOGGER.info(
+        "Échelle calibrée sur %d images hors banque : vmax %.2f "
+        "(médiane des scores %.2f, pic de heatmap %.2f).",
+        stats["n_images"], stats["vmax"], stats["score_median"], stats["heatmap_max"],
+    )
+    return stats
+
+
 def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
             progress=None, random_subset=False, overrides=None,
             num_workers=NUM_WORKERS):
@@ -237,6 +314,13 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
         fit_seconds, len(bank), peak_rss_gb,
     )
 
+    # Après le fit, avant la sauvegarde : la banque est en mémoire, prête à
+    # scorer, et l'échelle qu'on en tire part avec elle dans le fit_config.
+    notify("calibration", 0, 0)
+    calibration = holdout_vmax(
+        instance, spec, cfg, seed, device, extra_config, num_workers
+    )
+
     config = {
         **(extra_config or {}),
         **cfg,
@@ -254,6 +338,10 @@ def run_fit(spec, models_dir, coreset_pct, train_subset=None, extra_config=None,
         "peak_rss_gb": peak_rss_gb,
         "fit_seconds": fit_seconds,
     }
+    if calibration:
+        # Absent des banques d'avant, et des datasets sans nominal hors banque :
+        # la page doit pouvoir retomber sur sa table de valeurs par couche.
+        config["vmax_holdout"] = calibration
     notify("sauvegarde", 0, 0)
     save_dir = os.path.join(save_root, build_tag(cfg))
     if _env_flag("FIT_NO_SAVE"):

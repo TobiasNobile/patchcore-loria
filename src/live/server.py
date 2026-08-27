@@ -126,6 +126,14 @@ COLORMAP_HIGH = 0.9
 # Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
 OPACITY_MAX = 0.9
 
+# Quantile des scores du test qui devient le vmax, dans le mode auto-calibré.
+# Pas le maximum : une seule frame prise au bon angle placerait la saturation là
+# où l'anomalie n'est presque jamais, et elle resterait orange le reste du temps.
+# Le p90 laisse le dixième le plus marqué saturer franchement. La contrepartie
+# est qu'il porte sur *tout* le test — si l'anomalie n'y est montrée qu'un
+# dixième du temps, le p90 retombe dans le normal.
+CALIB_PERCENTILE = 90.0
+
 # Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
 # il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
 # rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
@@ -181,36 +189,53 @@ def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, alpha):
     return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
+def bank_summary(cfg, path, name, stored=True):
+    """La fiche d'une banque, telle que le bandeau de la page l'affiche.
+
+    Partagée par le sélecteur (les .pkg de coresets/) et par la banque
+    réellement chargée au scoring : une prise non stockée n'est dans aucun
+    sélecteur, et le bandeau doit quand même la nommer plutôt que de laisser
+    celui de la banque précédente.
+    """
+    return {
+        "dir": path,
+        "name": name,
+        "task": cfg.get("task", ""),
+        "backbone": patchcore.packaging.backbone_label(cfg.get("backbone_name", "?")),
+        "layers": "-".join(
+            l.replace("layer", "l")
+            for l in cfg.get("layers_to_extract_from", [])
+        ),
+        "coreset": ("identity" if cfg.get("sampler_name") == "identity"
+                    else "p{:g}".format(cfg.get("coreset_pct", 0))),
+        "imagesize": cfg.get("imagesize", 224),
+        "bank_size": cfg.get("memory_bank_size", 0),
+        "bank_gb": cfg.get("bank_gb", 0.0),
+        "train_images": cfg.get("n_train_images"),
+        "dataset": cfg.get("dataset"),
+        # Nombre de voisins cherchés au scoring : il vient de la banque, pas
+        # de la page, et change l'échelle des scores d'une banque à l'autre.
+        "num_nn": cfg.get("anomaly_scorer_num_nn"),
+        # Échelle mesurée sur le holdout au fit, quand la banque en porte
+        # une : le plus grand score des images normales écartées de la
+        # banque. Au-delà, la rampe sature — ce qui est le comportement
+        # voulu pour ce qui ne ressemble à rien de connu. Absente des
+        # banques d'avant, la page retombe alors sur sa table par couche.
+        "vmax": (cfg.get("vmax_holdout") or {}).get("vmax"),
+        "vmax_images": (cfg.get("vmax_holdout") or {}).get("n_images"),
+        # Faux pour une prise que personne n'a demandé de garder : elle vit le
+        # temps du scoring, et la page le dit plutôt que de la faire passer pour
+        # un fichier de coresets/.
+        "stored": stored,
+    }
+
+
 def find_banks():
     """Les .pkg de coresets/. Seul le fit_config est lu : l'index pèse jusqu'au Go."""
-    banks = []
-    for entry in patchcore.packaging.find(CORESETS_DIR):
-        cfg = entry["config"]
-        banks.append({
-            "dir": entry["path"],
-            "name": entry["name"],
-            "task": cfg.get("task", ""),
-            "backbone": patchcore.packaging.backbone_label(cfg.get("backbone_name", "?")),
-            "layers": "-".join(
-                l.replace("layer", "l")
-                for l in cfg.get("layers_to_extract_from", [])
-            ),
-            "coreset": ("identity" if cfg.get("sampler_name") == "identity"
-                        else "p{:g}".format(cfg.get("coreset_pct", 0))),
-            "imagesize": cfg.get("imagesize", 224),
-            "bank_size": cfg.get("memory_bank_size", 0),
-            "bank_gb": cfg.get("bank_gb", 0.0),
-            "train_images": cfg.get("n_train_images"),
-            "dataset": cfg.get("dataset"),
-            # Nombre de voisins cherchés au scoring : il vient de la banque, pas
-            # de la page, et change l'échelle des scores d'une banque à l'autre.
-            "num_nn": cfg.get("anomaly_scorer_num_nn"),
-            # Échelle mesurée sur le holdout au fit, quand la banque en porte
-            # une : le q999 des scores nominaux, soit la borne sous laquelle
-            # tombent 999 patchs normaux sur 1000. Au-delà, la rampe sature —
-            # ce qui est le comportement voulu pour ce qui n'est pas nominal.
-        })
-    return banks
+    return [
+        bank_summary(entry["config"], entry["path"], entry["name"])
+        for entry in patchcore.packaging.find(CORESETS_DIR)
+    ]
 
 
 class Runner:
@@ -225,6 +250,9 @@ class Runner:
         self._pending = None  # (kind, params), déposé par un thread HTTP
         self._wake = threading.Event()
         self._stop = threading.Event()
+        # Fin de la phase de test du mode auto-calibré. Distinct de `_stop` :
+        # celui-ci abandonne tout, celui-là clôt une phase et garde sa mesure.
+        self._fin_test = threading.Event()
         self._jpeg = None  # dernière vignette encodée (overlay), servie en MJPEG et capturée
         self._bank_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
@@ -244,12 +272,33 @@ class Runner:
             # 0 tant que la source n'est pas ouverte : la page n'a rien à annoncer.
             "smoothing_frames": 0,
             "source_fps": 0.0,
+            # Phase de test du mode auto-calibré : on score sans que ce soit
+            # encore la démo, en gardant le plus haut score vu. C'est lui qui
+            # devient le vmax du scoring qui suit.
+            # La banque réellement chargée, pour que le bandeau nomme ce qui est
+            # scoré et non ce que le sélecteur montre — les deux diffèrent dès
+            # qu'une prise n'est pas stockée.
+            "bank": None,
+            "calibrating": False,
+            "calib_max": None,
+            "calib_p90": None,
+            "calib_n": 0,
+            # La valeur retenue à la fin du test, qui reste posée pendant tout
+            # le scoring qui suit : la page la lit quand elle veut, au lieu
+            # d'avoir à surprendre la transition entre les deux boucles.
+            "calib_kept": None,
+            # L'échelle de la banque, pour situer le max du test : un test qui
+            # ne dépasse pas le pire nominal n'a rien montré d'anormal.
+            "calib_bank_vmax": None,
         }
         # Avancement du fit. `total` nul = phase sans compteur (le coreset).
+        # `vmax` est l'échelle mesurée sur le holdout, remontée à la page dès la
+        # fin du fit : en mode online la banque n'entre pas dans le sélecteur et
+        # le scoring enchaîne, c'est le seul chemin par lequel elle arrive.
         self._fit = {
             "running": False, "phase": None, "done": 0, "total": 0,
             "name": None, "error": None, "seconds": 0.0, "images": None,
-            "trained": None,
+            "trained": None, "vmax": None, "vmax_images": None,
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
@@ -345,6 +394,13 @@ class Runner:
             running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
             error=None, params=params, device_note=None,
             smoothing_frames=0, source_fps=0.0,
+            # `calibrer` n'est posé que par la phase de test du mode
+            # auto-calibré ; un scoring ordinaire l'efface en repassant ici.
+            calibrating=bool(params.get("calibrer")), calib_max=None,
+            calib_p90=None, calib_n=0,
+            calib_bank_vmax=params.get("bank_vmax"),
+            # Renseignée au chargement de la banque, quelques secondes plus tard.
+            bank=None,
         )
         # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
         self._live = {
@@ -377,6 +433,7 @@ class Runner:
                 "running": True, "phase": "Filmage en cours", "done": 0,
                 "total": int(params["duree_s"]), "name": None, "error": None,
                 "seconds": 0.0, "images": 0, "trained": None,
+                "vmax": None, "vmax_images": None,
             }
         self._wake.set()
         return True, None
@@ -393,7 +450,7 @@ class Runner:
             self._fit = {
                 "running": True, "phase": "préparation", "done": 0, "total": 0,
                 "name": None, "error": None, "seconds": 0.0, "images": None,
-                "trained": None,
+                "trained": None, "vmax": None, "vmax_images": None,
             }
         self._wake.set()
         return True, None
@@ -401,6 +458,18 @@ class Runner:
     def stop(self):
         """Arrête la boucle caméra, ou demande l'abandon d'un fit."""
         self._stop.set()
+        # Une phase de test qui attend son bouton doit aussi sortir de sa
+        # boucle : `_stop` la fait échouer plus haut, encore faut-il qu'elle
+        # rende la main.
+        self._fin_test.set()
+
+    def end_test(self):
+        """Clôt la phase de test du mode auto-calibré, en gardant sa mesure.
+
+        L'inverse de `stop` : la boucle rend son maximum, et le scoring de démo
+        enchaîne dessus. Sans effet hors de cette phase.
+        """
+        self._fin_test.set()
 
     def _update_fit(self, **fields):
         with self._lock:
@@ -536,6 +605,20 @@ class Runner:
             # elle vit dans staging et disparaît avec lui à l'arrêt du scoring.
             suite = dict(params, bank_dir=banque)
             with self._lock:
+                # L'échelle mesurée sur le holdout l'emporte sur le vmax envoyé
+                # par la page : quand celle-ci l'a lu, la banque n'existait pas
+                # encore, et le scoring enchaîne sans que personne ait la main
+                # entre les deux. La page la reprend dans son champ, où elle
+                # reste réglable comme n'importe quel réglage à chaud.
+                mesure = self._fit.get("vmax")
+                if mesure:
+                    suite["vmax"] = mesure
+                suite["bank_vmax"] = mesure
+
+            if params.get("autocalib"):
+                suite = self._tester_puis_calibrer(suite)
+
+            with self._lock:
                 self._stop.clear()
                 self._preparer_run(suite)
             self._run(suite)
@@ -552,6 +635,51 @@ class Runner:
                 capture.release()
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
+
+    def _tester_puis_calibrer(self, suite):
+        """Filmer l'anomalie, garder le plus haut score vu, et le prendre pour vmax.
+
+        Le pic de ce qu'on vient de montrer arrive alors exactement en haut de la
+        rampe, et tout le reste se lit par rapport à lui. C'est l'échelle de la
+        scène jouée, là où la calibration du fit donne celle du normal : les deux
+        nombres ne disent pas la même chose, et la page affiche les deux.
+
+        La phase se clôt au bouton, pas au chronomètre — personne ne sait
+        d'avance combien de temps il faut pour présenter une anomalie sous un
+        angle qui la montre.
+        """
+        essai = dict(suite, calibrer=True)
+        with self._lock:
+            self._stop.clear()
+            self._fin_test.clear()
+            self._state["calib_kept"] = None
+            self._preparer_run(essai)
+        mesure = self._run(essai)
+        if self._stop.is_set():
+            # Abandon, pas fin de test : rien n'est retenu, et `calib_kept`
+            # reste vide — la page n'affichera pas une échelle jamais appliquée.
+            raise KeyboardInterrupt("Test interrompu.")
+
+        suite = dict(suite)
+        if mesure:
+            suite["vmax"] = mesure["vmax"]
+            self._update(calib_kept=mesure["vmax"])
+            LOGGER.info(
+                "Test terminé : vmax %.2f (p%g de %d scores, max %.2f).",
+                mesure["vmax"], CALIB_PERCENTILE, mesure["n"], mesure["max"],
+            )
+        else:
+            # Bouton pressé avant la première inférence : rien à garder, on s'en
+            # tient à l'échelle du fit plutôt qu'à un vmax inventé.
+            LOGGER.info("Test sans aucun score : vmax inchangé.")
+        # Ce qui a été réglé à chaud pendant le test suit dans la démo : sans ça,
+        # zoom et lissage retomberaient sur ceux du formulaire, et l'image
+        # changerait entre la calibration et ce qu'elle est censée calibrer.
+        with self._lock:
+            for champ in ("zoom", "alpha", "stride", "smoothing",
+                          "smoothing_seconds"):
+                suite[champ] = self._live[champ]
+        return suite
 
     def _apercu(self, frame):
         """Vignette d'enrôlement, telle quelle.
@@ -608,14 +736,24 @@ class Runner:
 
         with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
             config = json.load(fh)
+        # Vide si le dataset n'a pas de nominal hors banque, ou si la
+        # calibration a été coupée : la page garde alors sa table par couche.
+        calibration = config.get("vmax_holdout") or {}
 
         if not stocker:
             # Ni empaquetée ni déplacée : elle reste dans staging, que l'appelant
             # supprimera à l'arrêt du scoring. Une banque de démonstration refaite
             # toutes les deux minutes n'a pas à laisser un .pkg derrière elle.
             self._update_fit(
-                running=False, phase="terminé", name=os.path.basename(bank_dir),
+                running=False, phase="terminé",
+                # Le nom qu'elle porterait si on la gardait, pas le tag brut du
+                # dossier de travail : c'est celui que la page annonce, et une
+                # prise non stockée n'a aucune raison de se nommer autrement.
+                name=patchcore.packaging.build_name(config, params["task"])[
+                    : -len(patchcore.packaging.SUFFIX)],
                 trained=config.get("n_train_images"),
+                vmax=calibration.get("vmax"),
+                vmax_images=calibration.get("n_images"),
                 seconds=time.perf_counter() - t0,
             )
             return bank_dir
@@ -632,16 +770,27 @@ class Runner:
         os.replace(staging, images_dir)
         staging = None
 
-        # trained < images : FolderDataset garde 20 % hors banque.
+        # trained < images : FolderDataset garde 20 % hors banque, et ce sont ces
+        # images-là qui viennent de donner l'échelle.
         self._update_fit(
             running=False, phase="terminé", name=name,
             trained=config.get("n_train_images"),
+            vmax=calibration.get("vmax"),
+            vmax_images=calibration.get("n_images"),
             seconds=time.perf_counter() - t0,
         )
         return pkg_path
 
     def _run(self, params):
+        """Score jusqu'à l'arrêt. En phase de test, renvoie ce qu'elle a mesuré.
+
+        `calibrer` distingue les deux usages de la même boucle : la démo, qu'on
+        arrête, et le test du mode auto-calibré, qu'on clôt en gardant sa mesure
+        — `{"vmax": p90, "max": …, "n": …}`, ou None si rien n'a été scoré.
+        """
         capture = None
+        calibrer = bool(params.get("calibrer"))
+        calib_scores, calib_max, calib_p90 = [], None, None
         try:
             tune_faiss_small_batches()
             device, device_note = resolve_device(params["device"])
@@ -672,6 +821,19 @@ class Runner:
                     "layer": layer,
                     "task": patchcore.packaging.slugify(fit_config.get("task", ""), ""),
                 }
+                # La fiche de ce qui est vraiment chargé. Un .pkg porte son nom
+                # de fichier ; une prise non stockée n'existe dans aucun
+                # sélecteur, on lui rend celui qu'elle aurait eu.
+                stored = params["bank_dir"].endswith(patchcore.packaging.SUFFIX)
+                nom = os.path.basename(params["bank_dir"])
+                self._state["bank"] = bank_summary(
+                    fit_config, params["bank_dir"],
+                    nom[: -len(patchcore.packaging.SUFFIX)] if stored
+                    else patchcore.packaging.build_name(
+                        fit_config, fit_config.get("task", ""))[
+                            : -len(patchcore.packaging.SUFFIX)],
+                    stored=stored,
+                )
 
             self._update(device=str(device), device_note=device_note)
 
@@ -716,7 +878,9 @@ class Runner:
             infer_ms = 0.0
             last_tick = time.perf_counter()
 
-            while not self._stop.is_set():
+            # Le test sort sur son bouton, la démo sur l'arrêt : deux sorties
+            # pour une seule boucle, et `stop` pose les deux drapeaux.
+            while not self._stop.is_set() and not (calibrer and self._fin_test.is_set()):
                 if paced:
                     # En avance : on attend l'heure de la frame suivante. En
                     # retard : on saute les frames dues avec grab(), qui les
@@ -778,6 +942,22 @@ class Runner:
 
                     scores.append(float(batch_scores[0]))
                     score = float(aggregate(list(scores), smoothing))
+                    if calibrer:
+                        # Le score brut de l'inférence, pas l'agrégat : le
+                        # lissage ne fait que retarder le même pic, et le tenir
+                        # sur la valeur brute rend la mesure indépendante d'un
+                        # réglage d'affichage changé en cours de test.
+                        calib_scores.append(float(batch_scores[0]))
+                        calib_max = max(calib_scores)
+                        # Le p90 plutôt que le max : une seule frame au bon
+                        # angle placerait la saturation là où l'anomalie n'est
+                        # presque jamais, et elle resterait orange tout le
+                        # reste du temps. Recalculé à chaque inférence — trier
+                        # quelques centaines de flottants ne coûte rien — pour
+                        # que le bouton porte la valeur qu'on garderait.
+                        calib_p90 = float(np.percentile(calib_scores, CALIB_PERCENTILE))
+                        self._update(calib_max=calib_max, calib_p90=calib_p90,
+                                     calib_n=len(calib_scores))
                     heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
                     smoothed = aggregate(list(heatmaps), smoothing)
@@ -806,7 +986,10 @@ class Runner:
         finally:
             if capture is not None:
                 capture.release()
-            self._update(running=False)
+            self._update(running=False, calibrating=False)
+        if not calib_scores:
+            return None
+        return {"vmax": calib_p90, "max": calib_max, "n": len(calib_scores)}
 
 
 RUNNER = Runner()
@@ -885,6 +1068,7 @@ class Handler(BaseHTTPRequestHandler):
                 "max_images": FIT_MAX_IMAGES,
                 "smoothing_seconds": SMOOTHING_SECONDS,
                 "smoothing_seconds_max": SMOOTHING_SECONDS_MAX,
+                "calib_percentile": CALIB_PERCENTILE,
                 "banks": banks,
                 "default_bank": default_bank_dir(banks),
             })
@@ -1125,6 +1309,9 @@ class Handler(BaseHTTPRequestHandler):
                     # Non cochée, la banque ne survit pas au scoring : c'est le
                     # défaut, parce qu'une prise se refait en vingt secondes.
                     "stocker": bool(p.get("stocker")),
+                    # Filmer l'anomalie après la banque, et prendre son pic pour
+                    # vmax. Sans ça, c'est l'échelle du holdout qui sert.
+                    "autocalib": bool(p.get("autocalib")),
                     "stride": max(1, int(p.get("stride") or 1)),
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),
@@ -1166,6 +1353,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "error": err})
         elif self.path == "/api/stop":
             RUNNER.stop()
+            self._json({"ok": True})
+        elif self.path == "/api/end_test":
+            # Clôt la phase de test du mode auto-calibré : le maximum vu devient
+            # le vmax, et la démo enchaîne. Sans effet ailleurs.
+            RUNNER.end_test()
             self._json({"ok": True})
         elif self.path == "/api/update":
             try:

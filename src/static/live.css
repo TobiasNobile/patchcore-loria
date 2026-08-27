@@ -133,6 +133,9 @@ input[type=file] { padding: 6px; font-size: 12px; }
    sur l'attribut [hidden]. Sans ces deux règles, les réglages du mode online
    restent visibles quel que soit le mode choisi. */
 #onlinefields[hidden], #storefield[hidden] { display: none; }
+/* Un <p> reste caché par [hidden] seul — aucune règle ne lui pose de display. */
+#onlinenote { color: var(--muted); font-size: 11px; line-height: 1.35;
+              margin: 0 0 9px; }
 #fitfill { height: 100%; width: 0; background: var(--ink); transition: width .3s; }
 #fitfill.pending { animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
@@ -153,6 +156,10 @@ button { font: inherit; padding: 6px 14px; border: 1px solid var(--ink);
 button.secondary { background: #fff; color: var(--ink); }
 button:disabled { opacity: .35; cursor: default; }
 #error { color: var(--bad); font-size: 12px; min-height: 16px; margin: 8px 0 0; }
+/* Bouton de fin de test : la seule action attendue pendant cette phase, donc
+   pleine largeur du carré et non secondaire. `hidden` suffit — rien ne lui pose
+   de display, et il n'apparaît que pendant la calibration. */
+#endtest { width: var(--carre); }
 
 /* ─── Scène ──────────────────────────────────────────────────────────────── */
 #stage { display: flex; flex-direction: column; align-items: center; gap: 6px;
