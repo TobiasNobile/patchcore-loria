@@ -30,14 +30,15 @@ import numpy as np
 from live.scoring import (  # isort: skip
     FAISS_NUM_WORKERS,
     FAISS_ON_GPU,
+    HEATMAP_ALPHA,
     HEATMAP_VMAX,
-    HEATMAP_VMIN,
     SMOOTHING_MODES,
     SMOOTHING_SECONDS,
     SMOOTHING_SECONDS_MAX,
     aggregate,
     calculer_nb_heatmaps,
     build_transform,
+    overlay_heatmap,
     preprocess,
 )
 
@@ -85,15 +86,9 @@ ENROL_IMAGES_PAR_S = 5.0
 # dire quelque chose, et tout ce qui bouge ensuite sera scoré comme anormal.
 ENROL_MIN_IMAGES = 20
 
-# Banque présélectionnée à l'ouverture de la page : sans elle, c'est la première
-# de coresets/ dans l'ordre alphabétique, qui n'a aucune raison d'être la bonne.
-# Comparaison par sous-chaîne sur le nom, donc le motif doit désigner une seule
-# banque : `DetectionKnife_l3-l4` suffisait tant qu'il n'y en avait qu'une, mais
-# une variante de coreset a suffi à le rendre ambigu — et c'est la première dans
-# l'ordre alphabétique qui l'emportait, soit p0.005 avant p0.01. Le coreset fait
-# donc partie du motif, et le backbone avec : les deux banques livrées dans le
-# dépôt ne diffèrent que par lui, et sans ça c'est ResNet50 qui l'emporterait par
-# ordre alphabétique — la plus faible des deux.
+# Banque présélectionnée à l'ouverture de la page. Comparaison par sous-chaîne :
+# le motif doit désigner une seule banque, coreset et backbone compris — sinon
+# c'est la première dans l'ordre alphabétique qui l'emporte.
 DEFAULT_BANK = os.environ.get(
     "LIVE_DEFAULT_BANK", "WideResNet50_DetectionKnife_l3-l4_p0.005")
 
@@ -115,34 +110,17 @@ MAX_UPLOAD_BYTES = 8 * 1024 ** 3
 VIDEOS_DIR = os.path.join("data", "videos", "uploads")
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v")
 
-# Seuil d'affichage, en fraction de vmax : sous `seuil x vmax`, rien n'est
-# dessiné du tout. Le curseur de la page est directement cette fraction — à 0,7,
-# seuls les scores au-dessus de 70 % de la borne apparaissent. C'était un
-# exposant d'opacité, qui ne rendait jamais rien tout à fait invisible : le fond
-# nominal gardait un voile, et il fallait pousser l'exposant à 4 pour l'effacer,
-# ce qui écrasait du même coup tout ce qui n'était pas au pic.
-HEATMAP_SEUIL = 0.7
-
-# Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
-COLORMAP_LOW = 0.1
-COLORMAP_HIGH = 0.9
-
-# Plafond du mélange : à 1 la couleur cache l'objet qu'on veut voir.
-OPACITY_MAX = 0.9
-
-# Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
-# il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
-# rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
+# Plafond du recadrage : au-delà il ne reste qu'une poignée de pixels étirés
+# à 224. À 8 il reste déjà moins d'un huitième de l'image.
 ZOOM_MAX = 8.0
 
-# Rattrapage borné : après une longue pause (onglet en arrière-plan, machine qui
-# a ramé), rejouer d'un coup toutes les frames en retard reviendrait à sauter la
-# scène entière. On reprend le fil, quitte à décaler l'horloge.
+# Rattrapage borné : après une longue pause, rejouer d'un coup toutes les frames
+# en retard sauterait la scène entière. On reprend le fil, l'horloge décale.
 MAX_SKIP_FRAMES = 60
 
 
-def clamp_seuil(value):
-    """Une fraction de vmax : hors de [0, 1] elle ne désigne plus rien d'affichable."""
+def clamp_alpha(value):
+    """L'exposant du canal alpha vit dans [0, 1]."""
     return min(max(float(value), 0.0), 1.0)
 
 
@@ -159,43 +137,18 @@ def clamp_seconds(value):
 def clean_dataset(name):
     """Nom du zip ou du dossier choisi pour le fit, gardé pour l'affichage.
 
-    Purement informatif — rien ne le relit — donc on le garde lisible (points,
-    espaces, accents) au lieu de le slugifier : seuls le chemin et les caractères
-    de contrôle sautent. `source` ne peut pas servir : il pointe le dossier de
-    transit, pas ce que l'utilisateur a désigné.
+    Purement informatif : seuls le chemin et les caractères de contrôle sautent.
     """
     base = os.path.basename(str(name).replace("\\", "/").rstrip("/"))
     return "".join(c for c in base if c.isprintable())[:80]
-
-
-def overlay_heatmap(preview_rgb, heatmap, vmin, vmax, seuil):
-    """Vignette + heatmap jet, en BGR. Pur affichage, aucun effet sur les scores.
-
-    `seuil` est une fraction de vmax : un pixel sous `seuil x vmax` n'est pas
-    dessiné, l'image reste nue dessous. Au-dessus, il est peint à l'opacité
-    pleine, la rampe jet portant seule la gradation — c'est une découpe, pas un
-    fondu, et c'est ce qui permet de ne montrer que ce qui dépasse.
-    """
-    normalized = np.clip(
-        (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
-    )
-    # La couleur est écrêtée aux deux bouts du jet, inexploitables ; le seuil,
-    # lui, porte sur la valeur brute.
-    ramp = np.clip(normalized, COLORMAP_LOW, COLORMAP_HIGH)
-    colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    # (H, W, 1) diffusé sur les 3 canaux BGR.
-    a = (normalized >= seuil).astype(np.float32)[:, :, None] * OPACITY_MAX
-    return (colored * a + frame * (1 - a)).astype(np.uint8)
 
 
 def bank_summary(cfg, path, name, stored=True):
     """La fiche d'une banque, telle que le bandeau de la page l'affiche.
 
     Partagée par le sélecteur (les .pkg de coresets/) et par la banque
-    réellement chargée au scoring : une prise non stockée n'est dans aucun
-    sélecteur, et le bandeau doit quand même la nommer plutôt que de laisser
-    celui de la banque précédente.
+    réellement chargée au scoring, qui n'est dans aucun sélecteur si elle n'a
+    pas été stockée.
     """
     return {
         "dir": path,
@@ -213,19 +166,14 @@ def bank_summary(cfg, path, name, stored=True):
         "bank_gb": cfg.get("bank_gb", 0.0),
         "train_images": cfg.get("n_train_images"),
         "dataset": cfg.get("dataset"),
-        # Nombre de voisins cherchés au scoring : il vient de la banque, pas
-        # de la page, et change l'échelle des scores d'une banque à l'autre.
+        # Vient de la banque, et change l'échelle des scores de l'une à l'autre.
         "num_nn": cfg.get("anomaly_scorer_num_nn"),
-        # Échelle mesurée sur le holdout au fit, quand la banque en porte
-        # une : le plus grand score des images normales écartées de la
-        # banque. Au-delà, la rampe sature — ce qui est le comportement
-        # voulu pour ce qui ne ressemble à rien de connu. Absente des
-        # banques d'avant, la page retombe alors sur sa table par couche.
+        # vmax = le plus grand score des images nominales écartées de la banque,
+        # mesuré au fit. Absent des banques d'avant la calibration.
         "vmax": (cfg.get("vmax_holdout") or {}).get("vmax"),
         "vmax_images": (cfg.get("vmax_holdout") or {}).get("n_images"),
         # Faux pour une prise que personne n'a demandé de garder : elle vit le
-        # temps du scoring, et la page le dit plutôt que de la faire passer pour
-        # un fichier de coresets/.
+        # temps du scoring.
         "stored": stored,
     }
 
@@ -285,8 +233,8 @@ class Runner:
         }
         # Paramètres modifiables À CHAUD (la page les change sans redémarrer).
         self._live = {
-            "zoom": 1.0, "vmin": HEATMAP_VMIN, "vmax": HEATMAP_VMAX,
-            "seuil": HEATMAP_SEUIL, "stride": 1, "smoothing": "none",
+            "zoom": 1.0, "vmax": HEATMAP_VMAX, "alpha": HEATMAP_ALPHA,
+            "stride": 1, "smoothing": "none",
             "smoothing_seconds": SMOOTHING_SECONDS,
         }
 
@@ -300,13 +248,12 @@ class Runner:
     def update_live(self, fields):
         """Zoom / échelle couleur / opacité / stride, ajustables en marche."""
         with self._lock:
-            for k in ("vmin", "vmax"):
-                if fields.get(k) is not None:
-                    self._live[k] = float(fields[k])
+            if fields.get("vmax") is not None:
+                self._live["vmax"] = float(fields["vmax"])
             if fields.get("zoom") is not None:
                 self._live["zoom"] = clamp_zoom(fields["zoom"])
-            if fields.get("seuil") is not None:
-                self._live["seuil"] = clamp_seuil(fields["seuil"])
+            if fields.get("alpha") is not None:
+                self._live["alpha"] = clamp_alpha(fields["alpha"])
             if fields.get("stride") is not None:
                 self._live["stride"] = max(1, int(fields["stride"]))
             if fields.get("smoothing") in SMOOTHING_MODES:
@@ -324,7 +271,7 @@ class Runner:
             jpeg = self._jpeg  # overlay avec heatmap, déjà encodé
             params = self._state["params"]
             meta = self._bank_meta or {}
-            seuil, vmax = self._live["seuil"], self._live["vmax"]
+            alpha, vmax = self._live["alpha"], self._live["vmax"]
         if jpeg is None:
             return None
         bank = params["bank_dir"] if params else ""
@@ -336,10 +283,10 @@ class Runner:
             "v{:g}".format(vmax),
         )
         os.makedirs(out_dir, exist_ok=True)
-        # Le seuil est la position même du curseur : un seul nombre au nom.
+        # L'exposant est la position même du curseur : un seul nombre au nom.
         path = os.path.join(
             out_dir,
-            "cap_{}_s{:.2f}.jpg".format(int(time.time() * 1000), seuil),
+            "cap_{}_a{:.2f}.jpg".format(int(time.time() * 1000), alpha),
         )
         with open(path, "wb") as fh:
             fh.write(jpeg)
@@ -380,9 +327,8 @@ class Runner:
         # Valeurs initiales des contrôles à chaud (ensuite pilotés par /api/update).
         self._live = {
             "zoom": clamp_zoom(params.get("zoom", 1.0)),
-            "vmin": HEATMAP_VMIN,
             "vmax": float(params.get("vmax", HEATMAP_VMAX)),
-            "seuil": clamp_seuil(params.get("seuil", HEATMAP_SEUIL)),
+            "alpha": clamp_alpha(params.get("alpha", HEATMAP_ALPHA)),
             "stride": max(1, int(params.get("stride", 1))),
             "smoothing": params.get("smoothing", "none"),
             "smoothing_seconds": clamp_seconds(
@@ -469,12 +415,6 @@ class Runner:
             self._update_fit(phase="extraction")
             counts = patchcore.uploads.extract_images(params["archive"], staging)
             available = counts[patchcore.uploads.NORMAL]
-            # Le nom dit ce qui est vraiment entré : 20 000 demandés sur 400 images donnent ts400.
-            # Le plafond s'applique même sans demande — un zip de 50 000 images
-            # n'en fitte que FIT_MAX_IMAGES, tirées au hasard (random_subset).
-            subset = min(params["train_subset"] or available, available, FIT_MAX_IMAGES)
-            # Rien d'écarté : tsall plutôt qu'un ts<n> qui ferait croire à un tirage.
-            subset = None if subset >= available else subset
             self._update_fit(images=available)
             pkg_path = self._construire_banque(staging, params, t0, available)
             staging = None
@@ -497,9 +437,7 @@ class Runner:
     def _enroler_et_scorer(self, params):
         """Filme quelques secondes, fitte dessus, et enchaîne le scoring.
 
-        Les trois étapes tiennent dans un seul travail parce qu'elles occupent le
-        même thread. Le prix est une caméra rouverte entre l'enrôlement et le
-        scoring — une seconde — contre une orchestration à trois temps côté page.
+        Un seul travail pour les trois étapes : elles occupent le même thread.
         """
         t0 = time.perf_counter()
         staging = os.path.join(CORESETS_DIR, ".incoming-{}".format(int(t0 * 1000)))
@@ -568,14 +506,11 @@ class Runner:
             # elle vit dans staging et disparaît avec lui à l'arrêt du scoring.
             suite = dict(params, bank_dir=banque)
             with self._lock:
-                # Auto-calibré : l'échelle mesurée sur les images tirées hors
-                # banque l'emporte sur le vmax envoyé par la page. Il le faut,
-                # parce que la banque n'existait pas quand la page a lu son
-                # champ, et que le scoring enchaîne sans que personne ait la main
-                # entre les deux — la page reprend la valeur ensuite, où elle
-                # reste réglable comme n'importe quel réglage à chaud. Décoché,
-                # c'est le vmax de la page qui vaut : celui de la table des
-                # couches, ou ce qui a été tapé.
+                # Auto-calibré, l'échelle mesurée l'emporte sur le vmax envoyé
+                # par la page : la banque n'existait pas quand la page a lu son
+                # champ, et le scoring enchaîne sans que personne ait la main
+                # entre les deux. Décoché, c'est le vmax de la page qui vaut :
+                # celui de la table des couches, ou ce qui a été tapé.
                 mesure = self._fit.get("vmax")
                 if mesure and params.get("autocalib"):
                     suite["vmax"] = mesure
@@ -597,14 +532,7 @@ class Runner:
                 shutil.rmtree(staging, ignore_errors=True)
 
     def _apercu(self, frame):
-        """Vignette d'enrôlement, telle quelle.
-
-        Le décompte y était incrusté, dans un bandeau de 58 px prévu pour le
-        grand carré. La page l'affiche dans un cadre de 160 px : le bandeau y
-        tombe à neuf pixels et le texte à trois, soit une barre noire et rien à
-        lire. Le décompte vit dans la ligne d'état, sous la barre d'avancement,
-        où il reste lisible et où il ne coûte pas un dixième de l'aperçu.
-        """
+        """Vignette d'enrôlement, telle quelle. Le décompte vit dans la page."""
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if ok:
             with self._lock:
@@ -651,19 +579,17 @@ class Runner:
 
         with open(os.path.join(bank_dir, patchcore.banks.CONFIG_FILENAME)) as fh:
             config = json.load(fh)
-        # Vide si le dataset n'a pas de nominal hors banque, ou si la
-        # calibration a été coupée : la page garde alors sa table par couche.
+        # Vide si le dataset n'a pas de nominal hors banque, ou si la calibration
+        # a été coupée : la page retombe alors sur HEATMAP_VMAX.
         calibration = config.get("vmax_holdout") or {}
 
         if not stocker:
             # Ni empaquetée ni déplacée : elle reste dans staging, que l'appelant
-            # supprimera à l'arrêt du scoring. Une banque de démonstration refaite
-            # toutes les deux minutes n'a pas à laisser un .pkg derrière elle.
+            # supprimera à l'arrêt du scoring.
             self._update_fit(
                 running=False, phase="terminé",
                 # Le nom qu'elle porterait si on la gardait, pas le tag brut du
-                # dossier de travail : c'est celui que la page annonce, et une
-                # prise non stockée n'a aucune raison de se nommer autrement.
+                # dossier de travail : c'est celui que la page annonce.
                 name=patchcore.packaging.build_name(config, params["task"])[
                     : -len(patchcore.packaging.SUFFIX)],
                 trained=config.get("n_train_images"),
@@ -686,7 +612,7 @@ class Runner:
         staging = None
 
         # trained < images : FolderDataset garde 20 % hors banque, et ce sont ces
-        # images-là qui viennent de donner l'échelle.
+        # images-là qui donnent vmax.
         self._update_fit(
             running=False, phase="terminé", name=name,
             trained=config.get("n_train_images"),
@@ -728,9 +654,9 @@ class Runner:
                     "layer": layer,
                     "task": patchcore.packaging.slugify(fit_config.get("task", ""), ""),
                 }
-                # La fiche de ce qui est vraiment chargé. Un .pkg porte son nom
-                # de fichier ; une prise non stockée n'existe dans aucun
-                # sélecteur, on lui rend celui qu'elle aurait eu.
+                # Un .pkg porte son nom de fichier ; une prise non stockée
+                # n'existe dans aucun sélecteur, on lui rend celui qu'elle
+                # aurait eu.
                 stored = params["bank_dir"].endswith(patchcore.packaging.SUFFIX)
                 nom = os.path.basename(params["bank_dir"])
                 self._state["bank"] = bank_summary(
@@ -756,18 +682,14 @@ class Runner:
             # Le fps déclaré par la source, pas celui du traitement : la fenêtre
             # de lissage se compte en temps de la scène filmée.
             source_fps = capture.get(cv2.CAP_PROP_FPS)
-            # Un fichier ne se cadence pas tout seul : sans horloge, il défile à
-            # la vitesse du traitement — au ralenti quand le stride est bas,
-            # en accéléré quand il est haut. Deux lissages ne sont alors plus
-            # comparables, puisque le temps lui-même change avec les réglages.
-            # Une caméra, elle, impose déjà son rythme.
+            # Un fichier ne se cadence pas tout seul : sans horloge il défile à la
+            # vitesse du traitement, et le stride changerait le temps lui-même.
             paced = not source.isdigit() and 1.0 <= source_fps <= 240.0
             clock = time.perf_counter()   # origine de l'horloge de lecture
             consumed = 0                  # frames prises à la source depuis clock
             scored_at = 0                 # `consumed` à la dernière inférence
-            # Stride effectif : frames de source par inférence, sauts compris.
-            # C'est lui, pas le stride demandé, qui donne l'espacement réel des
-            # cartes — donc la durée que couvre la fenêtre de lissage.
+            # Frames de source par inférence, sauts compris : c'est lui, pas le
+            # stride demandé, qui donne l'espacement réel des cartes.
             effective_stride = float(self.state()["live"]["stride"])
             window = calculer_nb_heatmaps(
                 source_fps, effective_stride, self.state()["live"]["smoothing_seconds"])
@@ -787,10 +709,8 @@ class Runner:
 
             while not self._stop.is_set():
                 if paced:
-                    # En avance : on attend l'heure de la frame suivante. En
-                    # retard : on saute les frames dues avec grab(), qui les
-                    # avance sans les décoder. Dans les deux cas la scène défile
-                    # à sa vitesse, et c'est le nombre d'inférences qui varie.
+                    # En avance on attend, en retard on saute les frames dues
+                    # avec grab(), qui les avance sans les décoder.
                     due = clock + consumed / source_fps
                     ahead = due - time.perf_counter()
                     if ahead > 0:
@@ -817,8 +737,7 @@ class Runner:
 
                 with self._lock:
                     zoom = self._live["zoom"]
-                    vmin, vmax = self._live["vmin"], self._live["vmax"]
-                    seuil = self._live["seuil"]
+                    vmax, alpha = self._live["vmax"], self._live["alpha"]
                     stride = self._live["stride"]
                     smoothing = self._live["smoothing"]
                     seconds = self._live["smoothing_seconds"]
@@ -834,9 +753,8 @@ class Runner:
                 tensor, preview = preprocess(frame, transform, zoom)
 
                 if frame_index % stride == 0:
-                    # Frames de source réellement consommées depuis la dernière
-                    # inférence : c'est l'espacement des cartes. Lissé, sinon un
-                    # saut isolé ferait osciller la fenêtre.
+                    # Espacement réel des cartes, lissé : un saut isolé ferait
+                    # sinon osciller la fenêtre.
                     if scored_at:
                         effective_stride = (0.7 * effective_stride
                                             + 0.3 * (consumed - scored_at))
@@ -856,7 +774,7 @@ class Runner:
                 # Encodé à chaque frame. Mode changé depuis la dernière inférence : carte brute.
                 shown = smoothed if smoothing == smoothed_mode else heatmap
                 ok_enc, buf = cv2.imencode(
-                    ".jpg", overlay_heatmap(preview, shown, vmin, vmax, seuil),
+                    ".jpg", overlay_heatmap(preview, shown, vmax, alpha),
                     [int(cv2.IMWRITE_JPEG_QUALITY), 80],
                 )
                 if ok_enc:
@@ -939,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/config":
             banks = find_banks()
             self._json({
-                "seuil_default": HEATMAP_SEUIL,
+                "alpha_default": HEATMAP_ALPHA,
                 "zoom_max": ZOOM_MAX,
                 "faiss_threads": FAISS_NUM_WORKERS,
                 "faiss_gpu": FAISS_ON_GPU,
@@ -1141,9 +1059,9 @@ class Handler(BaseHTTPRequestHandler):
                     "stride": max(1, int(params.get("stride") or 1)),
                     "zoom": clamp_zoom(params.get("zoom") or 1.0),
                     "vmax": float(params.get("vmax") or HEATMAP_VMAX),
-                    # `or` interdit : seuil=0 est une valeur voulue (heatmap pleine).
-                    "seuil": HEATMAP_SEUIL if params.get("seuil") is None
-                             else clamp_seuil(params["seuil"]),
+                    # `or` interdit : alpha=0 est une valeur voulue (heatmap pleine).
+                    "alpha": HEATMAP_ALPHA if params.get("alpha") is None
+                             else clamp_alpha(params["alpha"]),
                     "smoothing": (params.get("smoothing")
                                   if params.get("smoothing") in SMOOTHING_MODES
                                   else "none"),
@@ -1193,14 +1111,14 @@ class Handler(BaseHTTPRequestHandler):
                     # Non cochée, la banque ne survit pas au scoring : c'est le
                     # défaut, parce qu'une prise se refait en vingt secondes.
                     "stocker": bool(p.get("stocker")),
-                    # Filmer l'anomalie après la banque, et prendre son pic pour
-                    # vmax. Sans ça, c'est l'échelle du holdout qui sert.
+                    # Prendre pour vmax l'échelle que le fit vient de mesurer,
+                    # plutôt que le vmax de table envoyé par la page.
                     "autocalib": bool(p.get("autocalib")),
                     "stride": max(1, int(p.get("stride") or 1)),
                     "zoom": clamp_zoom(p.get("zoom") or 1.0),
                     "vmax": float(p.get("vmax") or HEATMAP_VMAX),
-                    "seuil": HEATMAP_SEUIL if p.get("seuil") is None
-                             else clamp_seuil(p["seuil"]),
+                    "alpha": HEATMAP_ALPHA if p.get("alpha") is None
+                             else clamp_alpha(p["alpha"]),
                     "smoothing": (p.get("smoothing")
                                   if p.get("smoothing") in SMOOTHING_MODES else "none"),
                     "smoothing_seconds": clamp_seconds(
@@ -1256,16 +1174,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _balayer_incomplets():
-    """Supprime les dossiers de travail laissés par une session tuée net.
-
-    Une banque non stockée vit dans coresets/.incoming-* le temps du scoring et
-    disparaît avec lui — sauf si le serveur est arrêté brutalement, auquel cas
-    elle s'accumule à côté des banques.
-
-    Silencieux : c'est du ménage que personne n'a demandé, et l'annoncer au
-    démarrage faisait passer pour un incident ce qui n'est qu'un dossier
-    temporaire ramassé.
-    """
+    """Supprime les coresets/.incoming-* laissés par une session tuée net."""
     for nom in os.listdir(CORESETS_DIR) if os.path.isdir(CORESETS_DIR) else []:
         if nom.startswith(".incoming-"):
             shutil.rmtree(os.path.join(CORESETS_DIR, nom), ignore_errors=True)

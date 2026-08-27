@@ -99,10 +99,10 @@ def measure(bank_dir):
     import cv2
 
     heatmap = np.zeros((size, size), np.float32)
-    from live.server import overlay_heatmap
+    from live.scoring import HEATMAP_ALPHA, overlay_heatmap
 
     def _encode():
-        img = overlay_heatmap(preview, heatmap, 0.0, 175.0, 2.0)
+        img = overlay_heatmap(preview, heatmap, 175.0, HEATMAP_ALPHA)
         cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
 
     row["encode"] = _median(_encode)

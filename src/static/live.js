@@ -4,14 +4,13 @@ const $ = (id) => document.getElementById(id);
 const liveForm = $("params");
 const fitForm = $("fit");
 // Pris sur les deux conteneurs, pas sur le <form> : les réglages d'affichage
-// vivent hors de lui — certains dans le panneau de droite, lissage et seuil sous
+// vivent hors de lui — certains dans le panneau de droite, lissage et alpha sous
 // la caméra. Sans les deux, ceux du bas ne seraient pas figés pendant un fit.
 const liveFields = [...document.querySelectorAll(
   "#livepanel input, #livepanel select, #stagecontrols input")];
 
-// Seuil d'affichage, en fraction de vmax : le curseur est directement cette
-// fraction, rien à mapper. Sous `seuil × vmax`, la heatmap n'est pas dessinée.
-let SEUIL_DEFAULT = 0.7;
+// Exposant du canal alpha, dans [0, 1] : le curseur est directement l'exposant.
+let ALPHA_DEFAULT = 0.5;
 // Durée de scène visée par le lissage ; le nombre de cartes en découle côté
 // serveur, avec le fps de la source et le stride — la page ne fait que l'afficher.
 let SMOOTHING_SECONDS = 1 / 3;
@@ -23,17 +22,12 @@ let BANKS = {};
 const esc = (s) => String(s).replace(
   /[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const seuilValue = () => parseFloat($("seuil").value);
+const alphaValue = () => parseFloat($("alpha").value);
 
-// Le curseur porte une fraction ; ce qu'on lit sur l'image est un score. Les deux
-// sont affichés — la fraction pour retrouver sa position, le score parce que
-// c'est lui qu'on compare au nombre sous la caméra.
-function seuilRender() {
-  const s = seuilValue();
-  const vmax = parseFloat($("vmax").value);
-  $("seuilval").textContent = s.toFixed(2)
-    + (vmax > 0 ? ` · ≥ ${fmtVmax(s * vmax)}` : "");
-  return s;
+function alphaRender() {
+  const a = alphaValue();
+  $("alphaval").textContent = a.toFixed(2);
+  return a;
 }
 
 // Une route que le serveur ne connaît pas répond « not found » en texte brut.
@@ -70,7 +64,7 @@ function readParams() {
     // Le serveur applique la mesure lui-même quand elle arrive après le
     // démarrage — fit online — donc il lui faut le mode.
     autocalib: autoCalib(),
-    seuil: seuilValue(),
+    alpha: alphaValue(),
     smoothing: smoothingMode(),
     smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
     loop: $("loop").checked,
@@ -80,49 +74,40 @@ function readParams() {
   };
 }
 
-// Repli pour les banques non calibrées. Ordres de grandeur du score de patch
-// selon la couche extraite : l'échelle change d'un facteur ~25 entre layer3 et
-// layer4, un vmax repris d'une autre couche donne une heatmap uniformément bleue
-// ou saturée. Indicatif, et aveugle à la scène : la valeur dépend aussi du
-// backbone, de la taille d'image et de ce qu'il y a devant la caméra. Une paire
-// [min, max] là où la plage utile est trop large pour se réduire à un point ; le
-// champ est pré-rempli avec sa borne basse.
-const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 10, "l3-l4": [150, 200] };
-
 // Le champ accepte le dixième : une échelle mesurée ne tombe pas sur un entier,
 // et l'arrondir à l'unité déplacerait la saturation sur les petites échelles.
 const fmtVmax = (v) => Math.round(v * 10) / 10;
 
-// Les couches de ce qu'on s'apprête à scorer — celles de la banque chargée, ou
-// celles cochées pour le prochain fit. Cf. showVmaxHint.
-let VMAX_LAYERS = "";
-// L'échelle mesurée que porte la banque chargée, ou null. Cf. renderVmaxHint.
-let VMAX_CALIB = null;
-// Cochée, le vmax vient de l'échelle mesurée au fit sur les images tirées hors
-// banque ; décochée, de la table des couches. Un seul commutateur pour les deux
-// origines — le reste de la page ne fait que les rendre.
-const autoCalib = () => $("selfcalib").checked;
+// Repli hors auto-calibration : ordres de grandeur du score de patch selon la
+// couche extraite — facteur ~25 entre layer3 et layer4. Aveugle à la scène et au
+// backbone. Une paire [min, max] là où la plage utile est trop large pour se
+// réduire à un point ; le champ prend la borne basse.
+const VMAX_HINT = { "l2": 20, "l3": 10, "l4": 260, "l2-l3": 10, "l3-l4": [150, 200] };
 
 // Vrai pendant le scoring. Le champ vmax ne se laisse pré-remplir qu'à l'arrêt :
 // en marche, la valeur affichée est celle que l'utilisateur a réglée à l'œil, et
-// la réécrire changerait l'image sous ses yeux. Ce n'est pas `vmax.disabled` qui
-// le dit — le champ est .live, donc jamais figé par le scoring, seulement par un
-// fit, moment où au contraire il faut le remettre à jour.
+// la réécrire changerait l'image sous ses yeux.
 let RUNNING = false;
+
+// Les couches de ce qu'on s'apprête à scorer : celles de la banque chargée, ou
+// celles cochées pour le prochain fit.
+let VMAX_LAYERS = "";
+// L'échelle mesurée que porte la banque chargée, ou null.
+let VMAX_CALIB = null;
+// Cochée : vmax = l'échelle mesurée au fit sur les images tirées hors banque.
+// Décochée : la table des couches. Un seul commutateur pour les deux origines.
+const autoCalib = () => $("selfcalib").checked;
 
 // Les couches, écrites comme la banque les nomme : layer3 -> l3.
 const layerKey = (layers) => layers.map((l) => l.replace("layer", "l")).join("-");
 
-// L'aide du champ vmax tient deux choses, qui arrivent séparément : l'échelle
-// mesurée de la banque chargée (avec la banque) et le repère de table des
-// couches en jeu (avec les cases du fit). Elles sont donc mémorisées, sinon
-// chacune effacerait l'autre — les mesures livrées par un fit ou par un test
-// arrivent sans couches, et les cases arrivent sans mesure.
 function tableRange(layers) {
   const hint = VMAX_HINT[layers];
   return hint === undefined ? null : [].concat(hint);
 }
 
+// L'aide tient deux choses qui arrivent séparément — la mesure vient avec la
+// banque, le repère de table avec les cases du fit — d'où leur mémorisation.
 function renderVmaxHint() {
   const range = tableRange(VMAX_LAYERS);
   const table = range ? `${range.join("–")} pour ${VMAX_LAYERS}` : null;
@@ -130,17 +115,15 @@ function renderVmaxHint() {
   const mesure = !c ? null
     : `mesuré ${fmtVmax(c.vmax)}`
       + (c.n_images ? ` sur ${c.n_images} image${c.n_images > 1 ? "s" : ""} hors banque` : "");
-  // « table » n'est écrit que face à une mesure, qu'il sert à situer : seul, le
-  // repère de couche est la seule chose affichée, il n'a rien à distinguer.
+  // « table » n'est écrit que face à une mesure, qu'il sert à situer.
   $("vmaxhint").textContent = mesure
     ? [mesure, table && "table " + table].filter(Boolean).join(" · ")
     : table || ("inconnu pour " + (VMAX_LAYERS || "?"));
 }
 
-// L'échelle que porte une banque : proposée dans le champ, sauf en marche — la
-// valeur affichée est alors celle qu'on a réglée à l'œil, la réécrire changerait
-// l'image sous les yeux. `force` est l'exception : un fit ou un test qui vient
-// de livrer son échelle, sur un champ que personne n'a encore touché.
+// L'échelle que porte une banque : proposée dans le champ, sauf en marche.
+// `force` : un fit qui vient de livrer la sienne, sur laquelle le scoring a déjà
+// démarré, et un champ que personne n'a encore eu le temps de toucher.
 function showVmaxHint(layers, calib, force) {
   if (layers) VMAX_LAYERS = layers;
   VMAX_CALIB = calib && calib.vmax ? calib : null;
@@ -153,10 +136,10 @@ function showVmaxHint(layers, calib, force) {
   if (range && !RUNNING) $("vmax").value = range[0];
 }
 
-// Le champ, réécrit depuis ce que le mode en vigueur désigne. Appelé sur un
-// geste explicite — la case, une couche cochée — donc il passe outre le scoring
-// en cours et prévient le serveur : écrire le champ sans le dire laisserait la
-// heatmap sur l'ancienne échelle, et le champ mentirait.
+// Le champ, réécrit depuis l'origine en vigueur. Appelé sur un geste explicite —
+// la case, une couche cochée — donc il passe outre le scoring en cours et
+// prévient le serveur : l'écrire sans le dire laisserait la heatmap sur
+// l'ancienne échelle, et le champ mentirait.
 function appliquerVmax() {
   if (autoCalib() && VMAX_CALIB) {
     $("vmax").value = fmtVmax(VMAX_CALIB.vmax);
@@ -166,13 +149,11 @@ function appliquerVmax() {
     $("vmax").value = range[0];
   }
   renderVmaxHint();
-  seuilRender();
   if (RUNNING) post("/api/update", { vmax: parseFloat($("vmax").value) });
 }
 
 // Cocher une couche change l'ordre de grandeur des scores d'un facteur ~25 :
-// hors mode auto-calibré, c'est ce qui pose le vmax, et ça doit valoir aussi en
-// marche — sinon le seul moyen de reprendre la table serait de taper le nombre.
+// hors auto-calibration, c'est ce qui pose le vmax, et ça vaut aussi en marche.
 function vmaxFromLayers(layers) {
   VMAX_LAYERS = layers;
   appliquerVmax();
@@ -207,9 +188,7 @@ function renderBank(m, cle) {
     ["banque", m.bank_size ? num(m.bank_size) + " vect." : null],
     ["taille", m.bank_gb ? m.bank_gb.toFixed(2) + " Go" : null],
     ["images fit", num(m.train_images)],
-    // Ce que la banque sait de sa propre échelle : le pire score nominal hors
-    // banque, et sur combien d'images il a été pris. Vide pour une banque
-    // d'avant la calibration, qui retombe sur la table par couche.
+    // Ce que la banque sait de sa propre échelle, et sur combien d'images.
     ["vmax", m.vmax ? fmtVmax(m.vmax) + (m.vmax_images ? ` · ${m.vmax_images} img` : "") : null],
   ];
   $("chips").innerHTML = chips
@@ -260,7 +239,7 @@ $("srcmode").addEventListener("change", () => {
   // En mode online il n'y a rien à envoyer : la caméra fournit les images, et le
   // scoring démarre tout seul sur la banque obtenue.
   $("dofit").textContent = mode === "online" ? "Filmer, fitter, démarrer" : "Fitter";
-  // En online, c'est la banque à venir qui sera scorée : le vmax conseillé est
+  // En online, c'est la banque à venir qui sera scorée : le vmax de repli est
   // celui de ses couches, et non celui de la banque encore sélectionnée.
   if (mode === "online") vmaxFromLayers(layerKey(selectedLayers()));
   $("fiterror").textContent = "";
@@ -409,10 +388,8 @@ fitForm.addEventListener("submit", async (e) => {
 
   if (srcMode() === "online") {
     // Le scoring démarre sur la banque qui va être construite, pas sur celle du
-    // sélecteur : le vmax du champ est encore celui de l'autre échelle, et
-    // personne n'a l'occasion de le corriger entre le fit et la première frame.
-    // On le recale ici, avant de lire les réglages — visible dans le champ, donc
-    // ajustable ensuite comme n'importe quel réglage à chaud.
+    // sélecteur : on recale le champ sur ses couches avant de lire les réglages.
+    // Auto-calibré, c'est le serveur qui posera la mesure dès qu'elle existe.
     vmaxFromLayers(layerKey(layers));
     // Un seul appel : la page n'a pas à orchestrer prise, fit et scoring, qui
     // occupent de toute façon le même thread côté serveur.
@@ -539,13 +516,9 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 // d'affichage comme un autre, il doit valoir aussi en marche.
 $("selfcalib").addEventListener("change", appliquerVmax);
 
-// Le seuil est une fraction de vmax : le score sous lequel rien ne s'affiche
-// suit, et le curseur doit le redire.
-$("vmax").addEventListener("input", seuilRender);
-
 $("smoothwin").addEventListener("input", () =>
   post("/api/update", { smoothing_seconds: parseFloat($("smoothwin").value || "0.3") }));
-$("seuil").addEventListener("input", () => post("/api/update", { seuil: seuilRender() }));
+$("alpha").addEventListener("input", () => post("/api/update", { alpha: alphaRender() }));
 
 // Une seule case, donc un seul mode : le maximum. La moyenne stabilisait mais
 // diluait un objet vu sur une seule frame — l'inverse de ce qu'on cherche ici.
@@ -656,20 +629,15 @@ function apply(s) {
 
   const fitting = applyFit(s.fit || {});
   // L'échelle mesurée par le fit qui vient de finir. En mode online la banque
-  // n'est pas stockée : elle n'entrera jamais dans le sélecteur, donc showBank
-  // ne la portera pas, et le scoring a déjà démarré dessus — d'où l'écriture
-  // forcée, sur un champ que personne n'a encore eu le temps de toucher. Le
-  // serveur applique la même valeur de son côté ; ici c'est pour qu'on la voie.
+  // n'est pas stockée : elle n'entrera dans aucun sélecteur, donc showBank ne la
+  // portera pas, et le scoring a déjà démarré dessus.
   const mesure = (s.fit || {}).vmax;
   // Un fit qui démarre remet le compteur : sans ça, un second fit rendant la
-  // même valeur au dixième près ne se réécrirait pas dans un champ entre-temps
-  // réglé à la main. Pendant le fit, `vmax` est nul de toute façon.
+  // même valeur ne se réécrirait pas dans un champ entre-temps réglé à la main.
   if ((s.fit || {}).running) lastFitVmax = null;
   if (mesure && mesure !== lastFitVmax) {
     lastFitVmax = mesure;
-    // `force` : en mode online le scoring a déjà démarré sur cette échelle, et
-    // le champ afficherait sinon une valeur que le serveur n'applique pas.
-    // Hors mode auto-calibré, showVmaxHint la range dans l'aide sans toucher au
+    // Hors auto-calibration, showVmaxHint la range dans l'aide sans toucher au
     // champ — le serveur, lui, n'a rien appliqué non plus.
     showVmaxHint(null, { vmax: mesure, n_images: s.fit.vmax_images }, true);
   }
@@ -691,9 +659,7 @@ function apply(s) {
   });
   [...fitForm.querySelectorAll("input,select,button")].forEach((f) => {
     // Les cases de couche font exception : elles ne règlent que le prochain fit,
-    // donc rien ne les oblige à être figées pendant le scoring — et c'est par
-    // elles qu'on rappelle l'échelle attendue d'une couche, ce qui n'a d'intérêt
-    // que si on peut le faire en regardant l'image.
+    // rien ne les oblige à être figées pendant le scoring.
     f.disabled = f.classList.contains("layerbox") ? fitting : fitting || s.running;
   });
   $("start").disabled = s.running || fitting;
@@ -709,9 +675,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 (async function init() {
   const cfg = await (await fetch("/api/config")).json();
   // `??` et non `=` : une clé absente — page chargée contre une version
-  // antérieure du serveur — laisserait sinon un undefined s'afficher, ou un NaN
-  // se propager dans le seuil.
-  SEUIL_DEFAULT = cfg.seuil_default ?? SEUIL_DEFAULT;
+  // antérieure du serveur — laisserait sinon un NaN se propager dans l'alpha.
+  ALPHA_DEFAULT = cfg.alpha_default ?? ALPHA_DEFAULT;
   // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
   // avant l'envoi, une valeur trop haute ne rendant qu'une bouillie floue.
   if (cfg.zoom_max) $("zoom").max = cfg.zoom_max;
@@ -738,8 +703,8 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
 
   fillBanks(cfg.banks, cfg.default_bank);
 
-  $("seuil").value = SEUIL_DEFAULT;
-  seuilRender();
+  $("alpha").value = ALPHA_DEFAULT;
+  alphaRender();
 
   refresh();
   setInterval(refresh, 300);

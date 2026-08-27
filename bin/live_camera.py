@@ -18,13 +18,14 @@ from collections import deque
 from live.scoring import (  # isort: skip
     FAISS_NUM_WORKERS,
     FAISS_ON_GPU,
+    HEATMAP_ALPHA,
     HEATMAP_VMAX,
-    HEATMAP_VMIN,
     SMOOTHING_MODES,
     SMOOTHING_SECONDS,
     aggregate,
     build_transform,
     calculer_nb_heatmaps,
+    overlay_heatmap,
     preprocess,
 )
 
@@ -41,22 +42,13 @@ LOGGER = logging.getLogger(__name__) # c'est pour avoir les logs dans le termina
 # Petite banque : le temps faiss est linéaire en sa taille. --bank_dir pour arbitrer.
 BANK_DIR = "models/celeba/wideresnet50_approx_greedy_coreset_p0.1_ts500_s0"
 
-# Opacité du mélange heatmap/image dans la fenêtre. La page, elle, module
-# l'opacité par le score (cf. OPACITY_MAX et l'exposant alpha de live/server.py).
-HEATMAP_ALPHA = 0.5
-
 # Racine des instantanés ; le sous-dossier vient de --bank_dir.
 SNAPSHOT_ROOT = "results"
 
 
-def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
-    """Superpose la heatmap et l'ATH sur la vignette. Renvoie une image BGR."""
-    normalized = np.clip(
-        (heatmap - vmin) / max(vmax - vmin, 1e-6), 0, 1
-    )
-    colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
-    overlay = cv2.addWeighted(colored, HEATMAP_ALPHA, frame, 1 - HEATMAP_ALPHA, 0)
+def render(preview_rgb, heatmap, score, fps, ms, paused, vmax, alpha):
+    """L'overlay de la page, plus l'ATH de la fenêtre. Renvoie une image BGR."""
+    overlay = overlay_heatmap(preview_rgb, heatmap, vmax, alpha)
 
     # La vignette fait 224 px de côté : illisible sans agrandissement.
     overlay = cv2.resize(overlay, (640, 640), interpolation=cv2.INTER_NEAREST)
@@ -103,14 +95,13 @@ def render(preview_rgb, heatmap, score, fps, ms, paused, vmin, vmax):
 @click.option("--loop/--no-loop", default=False, show_default=True,
               help="Rejouer en boucle une source fichier (sans effet sur une caméra).")
 @click.option("--vmax", default=None, type=float,
-              help="Borne haute de couleur du heatmap. Par défaut, l'échelle "
-                   "mesurée au fit sur les images hors banque, quand la banque "
-                   "en porte une ; sinon {:g}. Sans mesure, l'échelle des scores "
-                   "dépend de la couche : ~10 (layer3), ~20 (layer2), "
-                   "~260 (layer4).".format(HEATMAP_VMAX))
-@click.option("--vmin", default=HEATMAP_VMIN, show_default=True,
-              help="Borne basse de couleur du heatmap.")
-def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
+              help="Le plus grand score nominal hors banque, sous lequel rien "
+                   "n'est peint. Par défaut celui mesuré au fit, quand la "
+                   "banque en porte un ; sinon {:g}.".format(HEATMAP_VMAX))
+@click.option("--alpha", default=HEATMAP_ALPHA, show_default=True,
+              help="Exposant du canal alpha, dans [0, 1] : la couleur est posée "
+                   "à `max(score / vmax - 1, 0) ** alpha`.")
+def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, alpha):
     tune_faiss_small_batches()
     device = select_device()
 
@@ -121,8 +112,7 @@ def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
     transform = build_transform(fit_config)
 
     # Sans --vmax, l'échelle de la banque : le plus grand score des images
-    # normales gardées hors du fit. Une banque d'avant la calibration n'en porte
-    # pas, on retombe alors sur la constante.
+    # normales gardées hors du fit. Une banque d'avant n'en porte pas.
     if vmax is None:
         mesure = (fit_config.get("vmax_holdout") or {}).get("vmax")
         vmax = float(mesure) if mesure else HEATMAP_VMAX
@@ -187,7 +177,7 @@ def main(bank_dir, source, stride, zoom, smoothing, flip, loop, vmax, vmin):
             last_tick = now
             frame_index += 1
 
-            overlay = render(preview, heatmap, score, fps, infer_ms, paused, vmin, vmax)
+            overlay = render(preview, heatmap, score, fps, infer_ms, paused, vmax, alpha)
             cv2.imshow("PatchCore live", overlay)
 
             key = cv2.waitKey(1) & 0xFF

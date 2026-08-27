@@ -70,8 +70,7 @@ déposée dans `coresets/` est trouvée au démarrage suivant.
 Une page, deux moitiés. **À gauche**, on construit une banque : un nom de tâche,
 un backbone, les couches, le taux de coreset, un zip d'images sans l'anomalie à
 détecter, et « Fitter ». **À droite**, on choisit une banque et on score la caméra en direct
-— source, stride, échelle couleur et seuil d'affichage se règlent pendant que ça
-tourne.
+— source, stride, échelle couleur et opacité se règlent pendant que ça tourne.
 
 Le fit et le scoring s'excluent : les deux occupent le thread principal, seul
 endroit où torch est sûr sur macOS.
@@ -107,7 +106,7 @@ le backbone change.
 
 Une seconde banque, `DetectionKnifeVal2017_l3-l4_p0.005`, tient la même tâche à
 partir du seul `val2017` : 1 200 images de personne sans couteau, dont 960 dans
-la banque et 240 gardées hors banque pour le seuil, plus les 99 images à couteau
+la banque et 240 gardées hors banque pour l'échelle, plus les 99 images à couteau
 du split. Elle se fitte en deux minutes sur un portable, là où les 20 000
 demandent un nœud — le nuage de features avant coreset ne tient pas en 16 Go.
 
@@ -171,49 +170,50 @@ Les scripts live déduisent de la banque où écrire leurs captures
 
 ## Rendu de la heatmap
 
-Trois constantes de `src/live/server.py` gouvernent l'affichage, et donc les
-captures. Aucune ne touche aux scores.
+`overlay_heatmap()` de `src/live/scoring.py` fait tout le rendu, partagé par la
+page et par `bin/live_camera.py`. Aucun de ces réglages ne touche aux scores :
+
+```
+normalisé = max(heatmap / vmax − 1, 0)      # nul sous vmax
+couleur   = jet(clip(normalisé, 0,1 – 0,9))
+alpha     = clip(normalisé ** α, 0, 1)
+```
 
 | constante | rôle |
 | --- | --- |
 | `COLORMAP_LOW` / `COLORMAP_HIGH` = 0,1 / 0,9 | écrêtent l'indice dans la rampe jet. Au-delà de 0,9 elle vire au bordeaux, où deux distances très différentes rendent la même couleur ; sous 0,1 elle plonge dans le bleu nuit |
-| `OPACITY_MAX` = 0,9 | plafonne le mélange, pour que l'objet reste visible sous la tache même à très grande distance |
-| `HEATMAP_SEUIL` = 0,7 | position d'entrée du curseur de seuil, en fraction de vmax : sous `seuil × vmax`, la heatmap n'est pas dessinée du tout. Réglable en direct |
+| `HEATMAP_ALPHA` = 0,5 | position d'entrée du curseur d'opacité, l'exposant α ci-dessus, dans [0, 1] : à 1 le fondu est linéaire, à 0 tout est peint. Réglable en direct |
 | `SMOOTHING_SECONDS` = 1/3 | durée de vidéo couverte par la case « Lissage », réglable en direct dans la page. Le nombre de cartes en découle, via `calculer_nb_heatmaps(fps, stride, seconds)` de `src/live/scoring.py`, à partir du stride **effectif** — celui que la lecture en temps réel impose, sauts compris |
 
-L'écrêtage porte sur la **couleur seule**. Le seuil, lui, porte sur la valeur
-brute, et c'est une découpe et non un fondu : sous lui rien n'est peint, l'image
-reste nue ; au-dessus, la couleur couvre à l'opacité pleine et la rampe jet porte
-seule la gradation. Mesuré sur une frame à vmax 73, la part de carte peinte passe
-de 100 % (seuil 0) à 50 % (0,50), 13 % (0,70) et 0,2 % (0,90) — c'est ce réglage
-qui décide de ce qu'on montre, pas l'échelle.
+C'est `vmax` qui décide de ce qui s'affiche : rien n'est peint en dessous, et la
+couleur monte avec ce qui dépasse. L'exposant ne règle que la vitesse de cette
+montée, l'écrêtage que la **couleur**.
 
 ### `vmax`, mesuré au fit (branche `stage`)
 
-La borne haute de la rampe est une distance, sans unité, dont l'ordre de grandeur
-change avec la couche, le backbone **et la scène**. Elle n'est donc plus devinée :
-le fit repasse à travers la banque les 20 % d'images normales gardées hors banque
-et retient le plus grand de leurs scores. La valeur part dans `fit_config.json`
-(`vmax_holdout`), donc dans le `.pkg`, et la page pré-remplit le champ avec elle
-en disant sur combien d'images elle a été mesurée. Le champ reste réglable en
-direct, et une banque construite avant cet ajout retombe sur la table par couche
-de `live.js`, en l'annonçant.
+`vmax` est **le plus grand score du train en distribution** : le fit repasse à
+travers la banque les 20 % d'images normales gardées hors banque et retient le
+plus grand de leurs scores. C'est le pire nominal observé, donc le niveau
+au-dessus duquel ce qui passe devant la caméra ne ressemble plus à rien de connu
+de la scène — et c'est exactement là que la couleur commence.
 
-Au-dessus de cette valeur, la rampe sature : c'est le pire nominal observé, donc
-le niveau au-delà duquel ce qui passe devant la caméra ne ressemble plus à rien
-de connu de la scène. La passe coûte une inférence par image de holdout, plafonnée
-à 200 (`FIT_CALIB_IMAGES`, 0 pour couper). Réserve à connaître en mode « Filmer
-maintenant » : le holdout y est fait de frames voisines de celles de la banque,
-l'échelle obtenue est un plancher optimiste.
+La valeur part dans `fit_config.json` (`vmax_holdout`), donc dans le `.pkg` ; la
+page la reprend dans le champ en disant sur combien d'images elle a été mesurée,
+une puce du bandeau la porte, et le champ reste réglable en direct.
 
 La case **Self-calibrating VMax**, à côté du champ, commute les deux origines
 possibles : cochée, le vmax est cette échelle mesurée ; décochée, c'est la table
-par couche, qui suit les cases cochées à gauche. Rien à jouer devant la caméra —
-les images qui mesurent l'échelle sortent du même filmage que la banque.
+par couche de `live.js` (`l2: 20`, `l3: 10`, `l4: 260`, `l3-l4: 150–200`), qui
+suit les cases cochées à gauche et ne dépend d'aucun fit. C'est aussi le repli
+d'une banque construite avant la calibration, qui n'en porte aucune. La mesure
+reste affichée dans l'aide dans les deux cas : elle informe même décochée.
 
-Le champ reste réglable en direct dans les deux cas : une échelle mesurée est
-une proposition, pas une contrainte. Détail et relevés dans
-[docs/vmax.md](docs/vmax.md).
+La passe coûte une inférence par image de holdout, plafonnée à 200
+(`FIT_CALIB_IMAGES`, 0 pour couper). Réserve à connaître en mode « Filmer
+maintenant » : le holdout y est fait de frames voisines de celles de la banque,
+l'échelle obtenue est un plancher optimiste. Rien à jouer devant la caméra — les
+images qui mesurent l'échelle sortent du même filmage que la banque. Détail et
+relevés dans [docs/vmax.md](docs/vmax.md).
 
 ## Cadence live — coût d'une frame
 

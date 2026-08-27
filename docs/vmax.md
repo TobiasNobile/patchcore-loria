@@ -41,19 +41,18 @@ fit et garde le maximum de leurs scores. Il part dans `fit_config.json` sous
   heatmap — flouté et rééchantillonné, donc plus bas (70,55 contre 73,06 sur le
   relevé ci-dessus). Le nombre affiché sous la caméra et la borne de couleur
   sont alors la même grandeur. Le pic de carte est gardé pour situer l'écart.
-- **Aucune marge** : la couleur sature pile au-dessus du pire normal. Ce qui
-  s'affiche ou non se règle en dessous, au seuil, pas en déplaçant la mesure.
+- **Aucune marge** : la couleur commence pile au-dessus du pire normal, et c'est
+  la mesure elle-même qui décide de ce qui s'affiche.
 - Plafonné à 200 images (`FIT_CALIB_IMAGES`, 0 pour couper) et enveloppé dans un
   `try` : un dataset sans nominal hors banque ne fait pas échouer le fit.
 
 Côté page : le champ `vmax` est pré-rempli avec la valeur de la banque
 sélectionnée, l'aide dit sur combien d'images elle a été mesurée, une puce du
-bandeau la porte, et le champ reste réglable en direct. Une banque d'avant
-retombe sur la table par couche, **en le disant** (« banque non calibrée »).
-En mode « Filmer maintenant », la banque n'entre pas dans le sélecteur et le
-scoring enchaîne : c'est l'état du fit qui livre l'échelle, que le serveur
-applique et que la page écrit dans le champ. `bin/live_camera.py` prend la même
-valeur par défaut, `--vmax` la remplace.
+bandeau la porte, et le champ reste réglable en direct. En mode « Filmer
+maintenant », la banque n'entre pas dans le sélecteur et le scoring enchaîne :
+c'est l'état du fit qui livre l'échelle, que le serveur applique et que la page
+écrit dans le champ. `bin/live_camera.py` prend la même valeur par défaut,
+`--vmax` la remplace.
 
 ## La case « Self-calibrating VMax »
 
@@ -66,24 +65,29 @@ Le commutateur des deux origines possibles du vmax, à côté du champ :
 
 Elle agit en marche comme à l'arrêt : la basculer réécrit le champ et prévient le
 serveur. La mesure reste affichée dans l'aide même décochée, parce qu'elle
-informe même quand elle n'est pas appliquée.
+informe même quand elle n'est pas appliquée. Une banque d'avant la calibration
+n'en porte aucune : c'est la table qui sert, et l'aide affiche alors son repère
+(« 150–200 pour l3-l4 ») au lieu d'une mesure.
 
 Il n'y a **pas** de phase de test à jouer devant la caméra : les images qui
 mesurent l'échelle sont tirées au hasard du même filmage que la banque, en une
 seule prise. C'est tout l'intérêt — rien à présenter, rien à arrêter.
 
-## Le seuil d'affichage
+## Ce que l'affichage en fait
 
-Le vmax place le haut de la rampe ; le curseur sous la caméra en coupe le bas.
-C'est un seuil, en fraction de vmax : sous `seuil × vmax`, rien n'est dessiné,
-l'image reste nue — une découpe, pas un fondu. À 0,70 sur une échelle de 73,
-13 % de la carte est peinte, le reste de la vignette étant intact.
+Le vmax est le pied de la couleur, pas son sommet :
 
-C'était auparavant un exposant d'opacité, `(score / vmax)^α`, qui ne rendait
-jamais rien tout à fait invisible : le fond nominal gardait un voile, et il
-fallait pousser α à son maximum pour l'effacer — ce qui écrasait du même coup
-tout ce qui n'était pas au pic. Le seuil sépare les deux questions : jusqu'où va
-la couleur, et à partir d'où on montre quelque chose.
+```
+normalisé = max(heatmap / vmax − 1, 0)
+alpha     = clip(normalisé ** α, 0, 1)
+```
+
+Sous vmax, `normalisé` est nul et rien n'est peint — l'image reste nue, sans le
+voile que laissait l'ancien `(score / vmax)^α` mesuré depuis zéro. Au-dessus, la
+couleur monte avec l'écart relatif, et le curseur sous la caméra ne règle que
+l'exposant α, dans [0, 1] : à 1 le fondu est linéaire, plus bas il monte vite,
+à 0 tout est peint. Une découpe à seuil a été essayée entre les deux, puis
+retirée : elle re-tranchait ce que le vmax tranche déjà.
 
 ## Ce que ça ne dit pas
 
