@@ -143,14 +143,6 @@ def clamp_coef(value):
     return min(max(float(value), VMAX_COEF_MIN), VMAX_COEF_MAX)
 
 
-# Quantile des scores du test qui devient le vmax, dans le mode auto-calibré.
-# Pas le maximum : une seule frame prise au bon angle placerait la saturation là
-# où l'anomalie n'est presque jamais, et elle resterait orange le reste du temps.
-# Le p90 laisse le dixième le plus marqué saturer franchement. La contrepartie
-# est qu'il porte sur *tout* le test — si l'anomalie n'y est montrée qu'un
-# dixième du temps, le p90 retombe dans le normal.
-CALIB_PERCENTILE = 90.0
-
 # Plafond du recadrage : le zoom garde le centre sur h/zoom × w/zoom, donc au-delà
 # il ne reste qu'une poignée de pixels étirés à 224 — une bouillie floue, sans
 # rien qui dise pourquoi. À 8 il reste déjà moins d'un huitième de l'image.
@@ -271,9 +263,6 @@ class Runner:
         self._pending = None  # (kind, params), déposé par un thread HTTP
         self._wake = threading.Event()
         self._stop = threading.Event()
-        # Fin de la phase de test du mode auto-calibré. Distinct de `_stop` :
-        # celui-ci abandonne tout, celui-là clôt une phase et garde sa mesure.
-        self._fin_test = threading.Event()
         self._jpeg = None  # dernière vignette encodée (overlay), servie en MJPEG et capturée
         self._bank_meta = None  # {coreset, layer} de la banque, pour ranger les captures
         self._state = {
@@ -293,24 +282,10 @@ class Runner:
             # 0 tant que la source n'est pas ouverte : la page n'a rien à annoncer.
             "smoothing_frames": 0,
             "source_fps": 0.0,
-            # Phase de test du mode auto-calibré : on score sans que ce soit
-            # encore la démo, en gardant le plus haut score vu. C'est lui qui
-            # devient le vmax du scoring qui suit.
             # La banque réellement chargée, pour que le bandeau nomme ce qui est
             # scoré et non ce que le sélecteur montre — les deux diffèrent dès
             # qu'une prise n'est pas stockée.
             "bank": None,
-            "calibrating": False,
-            "calib_max": None,
-            "calib_p90": None,
-            "calib_n": 0,
-            # La valeur retenue à la fin du test, qui reste posée pendant tout
-            # le scoring qui suit : la page la lit quand elle veut, au lieu
-            # d'avoir à surprendre la transition entre les deux boucles.
-            "calib_kept": None,
-            # L'échelle de la banque, pour situer le max du test : un test qui
-            # ne dépasse pas le pire nominal n'a rien montré d'anormal.
-            "calib_bank_vmax": None,
         }
         # Avancement du fit. `total` nul = phase sans compteur (le coreset).
         # `vmax` est l'échelle mesurée sur le holdout, remontée à la page dès la
@@ -412,11 +387,6 @@ class Runner:
             running=True, score=None, fps=0.0, infer_ms=0.0, frames=0,
             error=None, params=params, device_note=None,
             smoothing_frames=0, source_fps=0.0,
-            # `calibrer` n'est posé que par la phase de test du mode
-            # auto-calibré ; un scoring ordinaire l'efface en repassant ici.
-            calibrating=bool(params.get("calibrer")), calib_max=None,
-            calib_p90=None, calib_n=0,
-            calib_bank_vmax=params.get("bank_vmax"),
             # Renseignée au chargement de la banque, quelques secondes plus tard.
             bank=None,
         )
@@ -476,18 +446,6 @@ class Runner:
     def stop(self):
         """Arrête la boucle caméra, ou demande l'abandon d'un fit."""
         self._stop.set()
-        # Une phase de test qui attend son bouton doit aussi sortir de sa
-        # boucle : `_stop` la fait échouer plus haut, encore faut-il qu'elle
-        # rende la main.
-        self._fin_test.set()
-
-    def end_test(self):
-        """Clôt la phase de test du mode auto-calibré, en gardant sa mesure.
-
-        L'inverse de `stop` : la boucle rend son maximum, et le scoring de démo
-        enchaîne dessus. Sans effet hors de cette phase.
-        """
-        self._fin_test.set()
 
     def _update_fit(self, **fields):
         with self._lock:
@@ -623,22 +581,17 @@ class Runner:
             # elle vit dans staging et disparaît avec lui à l'arrêt du scoring.
             suite = dict(params, bank_dir=banque)
             with self._lock:
-                # L'échelle mesurée sur le holdout l'emporte sur le vmax envoyé
-                # par la page : quand celle-ci l'a lu, la banque n'existait pas
-                # encore, et le scoring enchaîne sans que personne ait la main
-                # entre les deux. La page la reprend dans son champ, où elle
-                # reste réglable comme n'importe quel réglage à chaud.
+                # Auto-calibré : l'échelle mesurée sur les images tirées hors
+                # banque l'emporte sur le vmax envoyé par la page. Il le faut,
+                # parce que la banque n'existait pas quand la page a lu son
+                # champ, et que le scoring enchaîne sans que personne ait la main
+                # entre les deux — la page reprend la valeur ensuite, où elle
+                # reste réglable comme n'importe quel réglage à chaud. Décoché,
+                # c'est le vmax de la page qui vaut : celui de la table des
+                # couches, ou ce qui a été tapé.
                 mesure = self._fit.get("vmax")
-                if mesure:
+                if mesure and params.get("autocalib"):
                     suite["vmax"] = mesure * params.get("vmax_coef", 1.0)
-                # Brute, elle : c'est le repere du normal affiche pendant le
-                # test, pas une echelle appliquee.
-                suite["bank_vmax"] = mesure
-
-            if params.get("autocalib"):
-                suite = self._tester_puis_calibrer(suite)
-
-            with self._lock:
                 self._stop.clear()
                 self._preparer_run(suite)
             self._run(suite)
@@ -655,56 +608,6 @@ class Runner:
                 capture.release()
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
-
-    def _tester_puis_calibrer(self, suite):
-        """Filmer l'anomalie, garder le plus haut score vu, et le prendre pour vmax.
-
-        Le pic de ce qu'on vient de montrer arrive alors exactement en haut de la
-        rampe, et tout le reste se lit par rapport à lui. C'est l'échelle de la
-        scène jouée, là où la calibration du fit donne celle du normal : les deux
-        nombres ne disent pas la même chose, et la page affiche les deux.
-
-        La phase se clôt au bouton, pas au chronomètre — personne ne sait
-        d'avance combien de temps il faut pour présenter une anomalie sous un
-        angle qui la montre.
-        """
-        essai = dict(suite, calibrer=True)
-        with self._lock:
-            self._stop.clear()
-            self._fin_test.clear()
-            self._state["calib_kept"] = None
-            self._preparer_run(essai)
-        mesure = self._run(essai)
-        if self._stop.is_set():
-            # Abandon, pas fin de test : rien n'est retenu, et `calib_kept`
-            # reste vide — la page n'affichera pas une échelle jamais appliquée.
-            raise KeyboardInterrupt("Test interrompu.")
-
-        suite = dict(suite)
-        if mesure:
-            coef = suite.get("vmax_coef", 1.0)
-            suite["vmax"] = mesure["vmax"] * coef
-            # `calib_kept` reste la mesure brute : la page en refait le produit
-            # avec le coefficient qu'elle affiche, et les deux restent d'accord
-            # même si on le change juste après.
-            self._update(calib_kept=mesure["vmax"])
-            LOGGER.info(
-                "Test terminé : vmax %.2f (p%g de %d scores, max %.2f, "
-                "coefficient %.2f).",
-                suite["vmax"], CALIB_PERCENTILE, mesure["n"], mesure["max"], coef,
-            )
-        else:
-            # Bouton pressé avant la première inférence : rien à garder, on s'en
-            # tient à l'échelle du fit plutôt qu'à un vmax inventé.
-            LOGGER.info("Test sans aucun score : vmax inchangé.")
-        # Ce qui a été réglé à chaud pendant le test suit dans la démo : sans ça,
-        # zoom et lissage retomberaient sur ceux du formulaire, et l'image
-        # changerait entre la calibration et ce qu'elle est censée calibrer.
-        with self._lock:
-            for champ in ("zoom", "seuil", "stride", "smoothing",
-                          "smoothing_seconds"):
-                suite[champ] = self._live[champ]
-        return suite
 
     def _apercu(self, frame):
         """Vignette d'enrôlement, telle quelle.
@@ -807,15 +710,7 @@ class Runner:
         return pkg_path
 
     def _run(self, params):
-        """Score jusqu'à l'arrêt. En phase de test, renvoie ce qu'elle a mesuré.
-
-        `calibrer` distingue les deux usages de la même boucle : la démo, qu'on
-        arrête, et le test du mode auto-calibré, qu'on clôt en gardant sa mesure
-        — `{"vmax": p90, "max": …, "n": …}`, ou None si rien n'a été scoré.
-        """
         capture = None
-        calibrer = bool(params.get("calibrer"))
-        calib_scores, calib_max, calib_p90 = [], None, None
         try:
             tune_faiss_small_batches()
             device, device_note = resolve_device(params["device"])
@@ -903,9 +798,7 @@ class Runner:
             infer_ms = 0.0
             last_tick = time.perf_counter()
 
-            # Le test sort sur son bouton, la démo sur l'arrêt : deux sorties
-            # pour une seule boucle, et `stop` pose les deux drapeaux.
-            while not self._stop.is_set() and not (calibrer and self._fin_test.is_set()):
+            while not self._stop.is_set():
                 if paced:
                     # En avance : on attend l'heure de la frame suivante. En
                     # retard : on saute les frames dues avec grab(), qui les
@@ -967,22 +860,6 @@ class Runner:
 
                     scores.append(float(batch_scores[0]))
                     score = float(aggregate(list(scores), smoothing))
-                    if calibrer:
-                        # Le score brut de l'inférence, pas l'agrégat : le
-                        # lissage ne fait que retarder le même pic, et le tenir
-                        # sur la valeur brute rend la mesure indépendante d'un
-                        # réglage d'affichage changé en cours de test.
-                        calib_scores.append(float(batch_scores[0]))
-                        calib_max = max(calib_scores)
-                        # Le p90 plutôt que le max : une seule frame au bon
-                        # angle placerait la saturation là où l'anomalie n'est
-                        # presque jamais, et elle resterait orange tout le
-                        # reste du temps. Recalculé à chaque inférence — trier
-                        # quelques centaines de flottants ne coûte rien — pour
-                        # que le bouton porte la valeur qu'on garderait.
-                        calib_p90 = float(np.percentile(calib_scores, CALIB_PERCENTILE))
-                        self._update(calib_max=calib_max, calib_p90=calib_p90,
-                                     calib_n=len(calib_scores))
                     heatmap = np.asarray(batch_masks[0])
                     heatmaps.append(heatmap)
                     smoothed = aggregate(list(heatmaps), smoothing)
@@ -1011,10 +888,7 @@ class Runner:
         finally:
             if capture is not None:
                 capture.release()
-            self._update(running=False, calibrating=False)
-        if not calib_scores:
-            return None
-        return {"vmax": calib_p90, "max": calib_max, "n": len(calib_scores)}
+            self._update(running=False)
 
 
 RUNNER = Runner()
@@ -1092,7 +966,6 @@ class Handler(BaseHTTPRequestHandler):
                 "max_images": FIT_MAX_IMAGES,
                 "smoothing_seconds": SMOOTHING_SECONDS,
                 "smoothing_seconds_max": SMOOTHING_SECONDS_MAX,
-                "calib_percentile": CALIB_PERCENTILE,
                 "vmax_coef_min": VMAX_COEF_MIN,
                 "vmax_coef_max": VMAX_COEF_MAX,
                 "banks": banks,
@@ -1381,11 +1254,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "error": err})
         elif self.path == "/api/stop":
             RUNNER.stop()
-            self._json({"ok": True})
-        elif self.path == "/api/end_test":
-            # Clôt la phase de test du mode auto-calibré : le maximum vu devient
-            # le vmax, et la démo enchaîne. Sans effet ailleurs.
-            RUNNER.end_test()
             self._json({"ok": True})
         elif self.path == "/api/update":
             try:

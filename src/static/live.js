@@ -68,8 +68,9 @@ function readParams() {
     zoom: parseFloat($("zoom").value || "1"),
     vmax: parseFloat($("vmax").value || "10"),
     // Le serveur applique la mesure lui-même quand elle arrive après le
-    // démarrage (fit online, fin de test) : il lui faut la même marge.
+    // démarrage — fit online — donc il lui faut le mode et la marge.
     vmax_coef: vmaxCoef(),
+    autocalib: autoCalib(),
     seuil: seuilValue(),
     smoothing: smoothingMode(),
     smoothing_seconds: parseFloat($("smoothwin").value || "0.3"),
@@ -107,8 +108,11 @@ let VMAX_FROM_CALIB = false;
 // appliquée à un vmax tapé à la main : elle ne multiplie qu'une mesure.
 const vmaxCoef = () =>
   Math.min(Math.max(parseFloat($("vmax_coef").value) || 1, 0.1), 2);
-// Quantile des scores du test qui fait le vmax auto-calibré, relu de /api/config.
-let CALIB_P = 90;
+
+// Cochée, le vmax vient de l'échelle mesurée au fit sur les images tirées hors
+// banque ; décochée, de la table des couches. Un seul commutateur pour les deux
+// origines — le reste de la page ne fait que les rendre.
+const autoCalib = () => $("selfcalib").checked;
 
 // Vrai pendant le scoring. Le champ vmax ne se laisse pré-remplir qu'à l'arrêt :
 // en marche, la valeur affichée est celle que l'utilisateur a réglée à l'œil, et
@@ -134,10 +138,7 @@ function renderVmaxHint() {
   const range = tableRange(VMAX_LAYERS);
   const table = range ? `${range.join("–")} pour ${VMAX_LAYERS}` : null;
   const c = VMAX_CALIB;
-  // Deux mesures possibles, qui ne disent pas la même chose : le plafond du
-  // normal (holdout du fit) ou le pic de l'anomalie jouée (phase de test).
   const mesure = !c ? null
-    : c.test ? `${fmtVmax(c.vmax)} — p${c.p ?? 90} des scores du test`
     : `mesuré ${fmtVmax(c.vmax)}`
       + (c.n_images ? ` sur ${c.n_images} image${c.n_images > 1 ? "s" : ""} hors banque` : "");
   // « table » n'est écrit que face à une mesure, qu'il sert à situer : seul, le
@@ -154,7 +155,7 @@ function renderVmaxCalc() {
   const c = VMAX_CALIB;
   if (!c || !VMAX_FROM_CALIB) { $("vmaxcalc").textContent = ""; return; }
   const k = vmaxCoef();
-  const source = c.test ? `p${c.p ?? 90} du test` : "mesure hors banque";
+  const source = "mesure hors banque";
   $("vmaxcalc").textContent =
     `${k.toFixed(2)} × ${fmtVmax(c.vmax)} (${source}) = ${fmtVmax(c.vmax * k)}`;
 }
@@ -167,7 +168,7 @@ function showVmaxHint(layers, calib, force) {
   if (layers) VMAX_LAYERS = layers;
   VMAX_CALIB = calib && calib.vmax ? calib : null;
   renderVmaxHint();
-  if (VMAX_CALIB) {
+  if (VMAX_CALIB && autoCalib()) {
     if (!RUNNING || force) {
       $("vmax").value = fmtVmax(VMAX_CALIB.vmax * vmaxCoef());
       VMAX_FROM_CALIB = true;
@@ -180,22 +181,32 @@ function showVmaxHint(layers, calib, force) {
   renderVmaxCalc();
 }
 
-// Les cases de couche, elles, sont un geste explicite : elles l'emportent sur
-// toute échelle mesurée et s'appliquent même en marche — cocher layer4 change
-// l'ordre de grandeur des scores d'un facteur ~25, et c'est le moyen le plus
-// direct de reprendre la table sans taper le nombre. La mesure de la banque
-// reste affichée à côté, pour qu'on sache ce qu'on vient d'écarter.
+// Le champ, réécrit depuis ce que le mode en vigueur désigne. Appelé sur un
+// geste explicite — la case, le coefficient, une couche cochée — donc il passe
+// outre le scoring en cours et prévient le serveur : écrire le champ sans le
+// dire laisserait la heatmap sur l'ancienne échelle, et le champ mentirait.
+function appliquerVmax() {
+  if (autoCalib() && VMAX_CALIB) {
+    $("vmax").value = fmtVmax(VMAX_CALIB.vmax * vmaxCoef());
+    VMAX_FROM_CALIB = true;
+  } else {
+    const range = tableRange(VMAX_LAYERS);
+    if (!range) { renderVmaxHint(); renderVmaxCalc(); return; }
+    $("vmax").value = range[0];
+    VMAX_FROM_CALIB = false;
+  }
+  renderVmaxHint();
+  renderVmaxCalc();
+  seuilRender();
+  if (RUNNING) post("/api/update", { vmax: parseFloat($("vmax").value) });
+}
+
+// Cocher une couche change l'ordre de grandeur des scores d'un facteur ~25 :
+// hors mode auto-calibré, c'est ce qui pose le vmax, et ça doit valoir aussi en
+// marche — sinon le seul moyen de reprendre la table serait de taper le nombre.
 function vmaxFromLayers(layers) {
   VMAX_LAYERS = layers;
-  renderVmaxHint();
-  const range = tableRange(layers);
-  if (!range) { renderVmaxCalc(); return; }
-  $("vmax").value = range[0];
-  VMAX_FROM_CALIB = false;
-  renderVmaxCalc();
-  // Écrire le champ sans le dire au serveur laisserait la heatmap sur l'ancienne
-  // échelle : le champ mentirait sur ce qui est appliqué.
-  if (RUNNING) post("/api/update", { vmax: range[0] });
+  appliquerVmax();
 }
 
 // ─── Bandeau de banque ─────────────────────────────────────────────────────
@@ -447,9 +458,6 @@ fitForm.addEventListener("submit", async (e) => {
       duree_s: parseFloat($("duree_s").value || "20"),
       images_par_s: parseFloat($("images_par_s").value || "5"),
       stocker: $("stocker").checked,
-      // Coché, une phase de test s'intercale entre la banque et la démo : on y
-      // filme l'anomalie, et son pic devient le vmax.
-      autocalib: $("selfcalib").checked,
     }));
     if (res.error) { $("fiterror").textContent = res.error; $("fitstatus").textContent = ""; }
     refresh();
@@ -552,13 +560,6 @@ liveForm.addEventListener("submit", async (e) => {
   refresh();
 });
 $("stop").addEventListener("click", async () => { await post("/api/stop"); refresh(); });
-// Clôt la phase de test en gardant sa mesure — l'inverse d'Arrêter, qui
-// abandonne la séquence entière sans rien retenir.
-$("endtest").addEventListener("click", async () => {
-  $("endtest").disabled = true;   // le serveur met une frame à sortir de sa boucle
-  await post("/api/end_test");
-  refresh();
-});
 $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 
 ["zoom", "vmax", "stride"].forEach((id) => {
@@ -567,14 +568,8 @@ $("bank_dir").addEventListener("change", () => showBank($("bank_dir").value));
 });
 // Le coefficient recalcule le vmax appliqué depuis la mesure, et l'envoie :
 // c'est un réglage d'affichage comme un autre, il doit valoir en marche.
-$("vmax_coef").addEventListener("input", () => {
-  if (!VMAX_CALIB) { renderVmaxCalc(); return; }
-  const v = fmtVmax(VMAX_CALIB.vmax * vmaxCoef());
-  $("vmax").value = v;
-  VMAX_FROM_CALIB = true;
-  renderVmaxCalc();
-  post("/api/update", { vmax: v });
-});
+$("vmax_coef").addEventListener("input", appliquerVmax);
+$("selfcalib").addEventListener("change", appliquerVmax);
 
 // Un vmax tapé à la main n'est plus le produit affiché : le calcul s'efface.
 $("vmax").addEventListener("input", () => {
@@ -612,10 +607,8 @@ $("snap").addEventListener("click", async () => {
 
 let lastFitName = null;
 // Dernière échelle livrée par un fit, pour ne l'écrire qu'une fois : la relire à
-// chaque poll écraserait le réglage fait à la main juste après. Idem pour celle
-// gardée à la fin d'une phase de test.
+// chaque poll écraserait le réglage fait à la main juste après.
 let lastFitVmax = null;
-let lastKept = null;
 // Le flux MJPEG est-il clos ? Vrai au départ, et dès que le serveur cesse de
 // filmer et de scorer : le <img> doit alors être rebranché sur une URL neuve.
 let camCoupe = true;
@@ -649,22 +642,8 @@ function apply(s) {
     s.score === null || s.score === undefined ? "—" : s.score.toFixed(2);
   // « arrêté » sous une image manifestement vivante se lisait comme une panne :
   // depuis que le filmage occupe le grand carré, il lui faut son propre mot.
-  $("status").textContent = s.calibrating ? "test de l'anomalie"
-    : s.running ? "en cours"
+  $("status").textContent = s.running ? "en cours"
     : s.filming ? "filmage" : "arrêté";
-
-  // Phase de test : le bouton porte la valeur qu'on garde en le pressant, et la
-  // voir monter pendant qu'on présente l'anomalie dit quand l'angle est bon.
-  $("endtest").hidden = !s.calibrating;
-  if (s.calibrating) {
-    $("endtest").disabled = false;
-    // La valeur gardée est le p90, pas le pic : les deux sont écrits, l'écart
-    // entre eux dit à lui seul si l'anomalie a été montrée assez longtemps.
-    $("endtest").textContent = s.calib_p90
-      ? `Terminer le test · garder ${fmtVmax(s.calib_p90)} `
-        + `(p${CALIB_P} de ${s.calib_n} scores · pic ${fmtVmax(s.calib_max)})`
-      : "Terminer le test · rien de scoré";
-  }
 
   // Le lissage est rappelé sous le score : sur une scène stable son effet est
   // sous le niveau de couleur, et sans ce rappel on doute qu'il s'applique.
@@ -694,10 +673,6 @@ function apply(s) {
     ? [`${s.device || "…"}`, `${s.fps.toFixed(1)} fps`,
        `${s.infer_ms.toFixed(0)} ms/inf`, `${s.frames} frames`,
        s.source_fps ? `source ${Math.round(s.source_fps)} fps` : null,
-       // Le plafond du normal, mesuré au fit, pendant le seul moment où il sert
-       // de repère : un test qui ne le dépasse pas n'a rien montré d'anormal.
-       s.calibrating && s.calib_bank_vmax
-         ? `max normal ${fmtVmax(s.calib_bank_vmax)}` : null,
        lissage].filter(Boolean).join(" · ")
     : "";
   // Le bandeau nomme ce qui est scoré, pas ce que le sélecteur montre : une
@@ -729,15 +704,11 @@ function apply(s) {
   if ((s.fit || {}).running) lastFitVmax = null;
   if (mesure && mesure !== lastFitVmax) {
     lastFitVmax = mesure;
+    // `force` : en mode online le scoring a déjà démarré sur cette échelle, et
+    // le champ afficherait sinon une valeur que le serveur n'applique pas.
+    // Hors mode auto-calibré, showVmaxHint la range dans l'aide sans toucher au
+    // champ — le serveur, lui, n'a rien appliqué non plus.
     showVmaxHint(null, { vmax: mesure, n_images: s.fit.vmax_images }, true);
-  }
-  // Le test, quand il a eu lieu, l'emporte sur l'échelle du fit : il vient
-  // après, et c'est lui que le serveur applique. Le serveur garde la valeur
-  // posée pendant tout le scoring, donc rien à surprendre au bon instant — et
-  // rien n'est écrit si le test a été abandonné plutôt que terminé.
-  if (s.calib_kept && s.calib_kept !== lastKept) {
-    lastKept = s.calib_kept;
-    showVmaxHint(null, { vmax: s.calib_kept, test: true, p: CALIB_P }, true);
   }
   // Une banque qui vient d'être écrite est sélectionnée : c'est celle qu'on
   // veut essayer, et le sélecteur ne l'a pas encore.
@@ -798,7 +769,6 @@ async function refresh() { apply(await (await fetch("/api/state")).json()); }
   MAX_IMAGES = cfg.max_images ?? MAX_IMAGES;
   $("train_subset").max = MAX_IMAGES;
   $("maximages").textContent = MAX_IMAGES;
-  CALIB_P = cfg.calib_percentile ?? CALIB_P;
   // Le serveur borne de son côté ; ici c'est pour que le champ refuse la valeur
   // avant l'envoi.
   if (cfg.vmax_coef_min) $("vmax_coef").min = cfg.vmax_coef_min;

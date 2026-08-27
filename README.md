@@ -206,12 +206,12 @@ de connu de la scène. La passe coûte une inférence par image de holdout, plaf
 maintenant » : le holdout y est fait de frames voisines de celles de la banque,
 l'échelle obtenue est un plancher optimiste.
 
-La case **Self-calibrating VMax**, dans ce même mode, prend l'échelle par l'autre
-bout : après la banque, on filme l'**anomalie**, un bouton clôt le test, et le
-**p90 des scores du test** devient le VMax — pas le pic, qu'une seule frame bien
-cadrée suffirait à porter trop haut.
+La case **Self-calibrating VMax**, à côté du champ, commute les deux origines
+possibles : cochée, le vmax est cette échelle mesurée ; décochée, c'est la table
+par couche, qui suit les cases cochées à gauche. Rien à jouer devant la caméra —
+les images qui mesurent l'échelle sortent du même filmage que la banque.
 
-Ces deux échelles sont des mesures ; ce qu'on en fait reste un réglage. Un
+Cette échelle est une mesure ; ce qu'on en fait reste un réglage. Un
 coefficient à côté du champ pose la marge — `vmax = coefficient × mesure`, 1 par
 défaut, et le calcul est écrit sous le champ. Il ne multiplie qu'une mesure :
 un vmax tapé à la main lui échappe. Détail des deux échelles et relevés dans

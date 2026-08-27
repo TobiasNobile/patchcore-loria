@@ -55,48 +55,23 @@ scoring enchaîne : c'est l'état du fit qui livre l'échelle, que le serveur
 applique et que la page écrit dans le champ. `bin/live_camera.py` prend la même
 valeur par défaut, `--vmax` la remplace.
 
-## Le mode « Self-calibrating VMax »
+## La case « Self-calibrating VMax »
 
-Une case du mode « Filmer maintenant », qui intercale une phase entre la banque
-et la démo :
+Le commutateur des deux origines possibles du vmax, à côté du champ :
 
-```
-filmer le normal (20 s) → banque → filmer l'ANOMALIE → [Terminer le test] → démo
-                                   ↑ scores collectés, p90 gardé
-```
-
-VMax devient alors le **p90 des scores du test** (`CALIB_PERCENTILE`). Pas le
-maximum : une seule frame prise au bon angle placerait la saturation là où
-l'anomalie n'est presque jamais, et elle resterait orange tout le reste du temps.
-Le p90 laisse franchement saturer le dixième le plus marqué.
-
-La phase se clôt au bouton et non au chronomètre — personne ne sait d'avance
-combien de temps il faut pour présenter une anomalie sous un angle qui la montre.
-Pendant le test, le bouton porte les deux nombres (« garder 121,5 · p90 de 212
-scores · pic 137,2 ») et la ligne d'état rappelle le plafond du normal mesuré au
-fit. Trois lectures immédiates :
-
-- pic **et** p90 loin au-dessus du max normal : l'anomalie a été montrée assez
-  longtemps, l'échelle est bonne ;
-- pic haut mais p90 proche du max normal : elle n'a été vue qu'un instant, le
-  p90 porte sur *tout* le test et retombe dans le normal — refaire en la
-  montrant plus longtemps, ou garder l'échelle du fit ;
-- pic lui-même sous le max normal : rien d'anormal n'a été filmé.
-
-Les deux échelles ne disent pas la même chose, et c'est pourquoi les deux
-existent :
-
-| | mesure | ce qu'on lit ensuite |
+| case | vmax | ce que ça vaut |
 | --- | --- | --- |
-| holdout (défaut) | max des scores du **normal** hors banque | tout ce qui dépasse le pire nominal sature — sensible, sans rien avoir à montrer |
-| test (la case) | p90 des scores de l'**anomalie jouée** | la scène occupe la rampe et l'anomalie sature vraiment — mais le p90 dépend de la part du test où elle était visible |
+| décochée (défaut) | la table par couche de `live.js`, suivant les cases cochées à gauche | ne dépend d'aucun fit, mais ne sait rien de la scène ni du backbone |
+| cochée | l'échelle mesurée au fit sur les images tirées hors banque | connaît la scène, et n'existe que si la banque porte la mesure |
 
-Côté implémentation, la phase de test **est** la boucle de scoring, avec un
-drapeau `calibrer` : même cadence, même lissage, même overlay. Deux sorties pour
-une boucle — `stop` abandonne tout sans rien garder (`Test interrompu.`),
-`end_test` la clôt en gardant sa mesure. Ce qui a été réglé à chaud pendant le
-test (zoom, alpha, stride, lissage) suit dans la démo : sans ça, l'image
-changerait entre la calibration et ce qu'elle est censée calibrer.
+Elle agit en marche comme à l'arrêt : la basculer réécrit le champ et prévient le
+serveur. Le coefficient ne s'applique qu'au premier cas — il multiplie une
+mesure, pas une valeur de table — et la mesure reste affichée dans l'aide même
+décochée, parce qu'elle informe même quand elle n'est pas appliquée.
+
+Il n'y a **pas** de phase de test à jouer devant la caméra : les images qui
+mesurent l'échelle sont tirées au hasard du même filmage que la banque, en une
+seule prise. C'est tout l'intérêt — rien à présenter, rien à arrêter.
 
 ## Le coefficient
 

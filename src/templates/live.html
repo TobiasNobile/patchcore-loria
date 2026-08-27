@@ -90,13 +90,6 @@
       <div class="checks" id="storefield" hidden>
         <label class="check"><input id="stocker" type="checkbox">
           <span>Stocker la banque dans coresets/</span></label>
-        <!-- Une troisième échelle possible, et la seule qui demande de jouer la
-             scène : le pic de l'anomalie montrée arrive en haut de la rampe.
-             Décochée, c'est le holdout du fit qui donne le vmax — le plafond du
-             normal, mesuré sans rien avoir à montrer. -->
-        <label class="check"><input id="selfcalib" type="checkbox">
-          <span>Self-calibrating VMax<small>après la banque, filmer l'anomalie ;
-            un bouton clôt le test et garde le score le plus haut vu</small></span></label>
       </div>
 
       <div class="actions">
@@ -118,11 +111,6 @@
     <div id="status" class="idle">arrêté</div>
     <div id="meta"></div>
     <div id="notice" hidden></div>
-    <!-- Visible pendant la seule phase de test du mode auto-calibré. Il porte le
-         maximum en cours : c'est la valeur qu'on garde en le pressant, et la
-         voir monter pendant qu'on présente l'anomalie dit quand on a trouvé le
-         bon angle. Distinct d'Arrêter, qui abandonne tout. -->
-    <button id="endtest" type="button" hidden>Terminer le test</button>
     <button id="snap" type="button" class="secondary" disabled>📷 Enregistrer la frame</button>
     <div id="capture"></div>
 
@@ -226,6 +214,18 @@
       <input id="stride" class="live" type="number" min="1" step="1" value="3">
       <input id="zoom" class="live" type="number" min="1" max="8" step="0.1" value="1">
     </div>
+
+    <!-- Le commutateur des deux origines possibles du vmax. Coché, c'est
+         l'échelle mesurée au fit sur les images tirées hors banque, qui connaît
+         la scène. Décoché, c'est la table par couche de live.js, qui n'en sait
+         rien mais ne dépend d'aucun fit — et qui suit les cases cochées à
+         gauche. La mesure reste affichée dans les deux cas : elle informe même
+         quand elle n'est pas appliquée. -->
+    <label class="check">
+      <input id="selfcalib" class="live" type="checkbox">
+      <span>Self-calibrating VMax<small>vmax = l'échelle mesurée sur les 20 %
+        d'images tirées hors banque, plutôt que la table des couches</small></span>
+    </label>
 
     <!-- L'échelle est mesurée au fit : les 20 % d'images normales gardées hors
          banque y sont repassées, et vmax est le plus grand de leurs scores —
