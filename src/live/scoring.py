@@ -66,8 +66,12 @@ def overlay_heatmap(preview_rgb, heatmap, vmax, alpha):
     colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     # (H, W, 1) diffusé sur les 3 canaux BGR.
-    a = np.clip(normalized ** float(alpha), 0.0, 1.0)[:, :, None]
-    return (colored * a + frame * (1 - a)).astype(np.uint8)
+    canal_alpha = np.clip(normalized ** float(alpha), 0.0, 1.0)[:, :, None]
+    # Pas cv2.addWeighted : à cause du flux MJPEG qui prend pas en compte le canal alpha 🤡
+    # exemple avec normalized 0.25, colored 200, frame 100
+    # alpha 0 : canal_alpha 0.25**0 = 1    -> 200*1 + 100*0 = 200, toute la heatmap
+    # alpha 1 : canal_alpha 0.25**1 = 0.25 -> 200*.25 + 100*.75 = 125, que l'extrême rouge
+    return (colored * canal_alpha + frame * (1 - canal_alpha)).astype(np.uint8)
 
 
 def calculer_nb_heatmaps(fps, stride, seconds=SMOOTHING_SECONDS):
