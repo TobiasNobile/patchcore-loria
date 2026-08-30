@@ -28,8 +28,8 @@ HEATMAP_VMAX = 10.0
 HEATMAP_ALPHA = 0.5
 
 # Bornes de la rampe de couleur : les deux bouts du jet sont inexploitables.
-COLORMAP_LOW = 0.1
-COLORMAP_HIGH = 0.9
+COLORMAP_LOW = 0
+COLORMAP_HIGH = 1
 
 # Profondeur des agrégations optionnelles, en frames scorées.
 SMOOTHING_SECONDS = 1 / 3
@@ -62,7 +62,7 @@ def overlay_heatmap(preview_rgb, heatmap, vmax, alpha):
     colored = cv2.applyColorMap((ramp * 255).astype(np.uint8), cv2.COLORMAP_JET)
     frame = cv2.cvtColor(preview_rgb, cv2.COLOR_RGB2BGR)
     # (H, W, 1) diffusé sur les 3 canaux BGR.
-    canal_alpha = np.clip(normalized ** float(alpha), 0.0, 1.0)[:, :, None]
+    canal_alpha = np.clip(normalized **(1 - float(alpha*0.8 + 0.1)), 0.0, 0.8)[:, :, None]
     # Pas cv2.addWeighted : à cause du flux MJPEG qui prend pas en compte le canal alpha 🤡
     # exemple avec normalized 0.25, colored 200, frame 100
     # alpha 0 : canal_alpha 0.25**0 = 1    -> 200*1 + 100*0 = 200, toute la heatmap
